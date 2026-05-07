@@ -266,6 +266,64 @@ describe('addAddress', () => {
         );
     });
 
+    it('should discover and save the Herald relay agent when the address domain advertises one', async () => {
+        const relay = await keymaster.createId('Herald');
+        await keymaster.createId('Alice');
+        jest.useFakeTimers();
+        jest.setSystemTime(new Date('2026-04-04T13:15:00.000Z'));
+
+        jest.spyOn(keymaster, 'createResponse').mockResolvedValue('did:cid:response');
+        jest.spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(mockFetchResponse(true, { challenge: 'did:cid:challenge' }))
+            .mockResolvedValueOnce(mockFetchResponse(true, { ok: true, name: 'alice' }))
+            .mockResolvedValueOnce(mockFetchResponse(true, { serviceDID: relay, relayAgent: relay }));
+
+        const ok = await keymaster.addAddress('alice@archon.social');
+        const addresses = await keymaster.listAddresses();
+        const walletData = await keymaster.loadWallet();
+        const info = {
+            added: '2026-04-04T13:15:00.000Z',
+            relay,
+        };
+
+        expect(ok).toBe(true);
+        expect(addresses).toStrictEqual({ 'alice@archon.social': info });
+        expect(walletData.ids.Alice.addresses).toStrictEqual({
+            'archon.social': {
+                name: 'alice',
+                ...info,
+            },
+        });
+        expect(globalThis.fetch).toHaveBeenNthCalledWith(3, 'https://archon.social/names/api/config');
+    });
+
+    it('should not treat a Herald service DID as an email relay unless relay is advertised', async () => {
+        const serviceDID = await keymaster.createId('Herald');
+        await keymaster.createId('Alice');
+        jest.useFakeTimers();
+        jest.setSystemTime(new Date('2026-04-04T13:20:00.000Z'));
+
+        jest.spyOn(keymaster, 'createResponse').mockResolvedValue('did:cid:response');
+        jest.spyOn(globalThis, 'fetch')
+            .mockResolvedValueOnce(mockFetchResponse(true, { challenge: 'did:cid:challenge' }))
+            .mockResolvedValueOnce(mockFetchResponse(true, { ok: true, name: 'alice' }))
+            .mockResolvedValueOnce(mockFetchResponse(true, { serviceDID }));
+
+        const ok = await keymaster.addAddress('alice@archon.social');
+        const addresses = await keymaster.listAddresses();
+        const walletData = await keymaster.loadWallet();
+        const info = { added: '2026-04-04T13:20:00.000Z' };
+
+        expect(ok).toBe(true);
+        expect(addresses).toStrictEqual({ 'alice@archon.social': info });
+        expect(walletData.ids.Alice.addresses).toStrictEqual({
+            'archon.social': {
+                name: 'alice',
+                ...info,
+            },
+        });
+    });
+
     it('should fall back to direct Herald endpoints when drawbridge paths are unavailable', async () => {
         await keymaster.createId('Alice');
         jest.useFakeTimers();
@@ -404,8 +462,12 @@ describe('removeAddress', () => {
         jest.spyOn(globalThis, 'fetch')
             .mockResolvedValueOnce(mockFetchResponse(true, { challenge: 'did:cid:challenge' }))
             .mockResolvedValueOnce(mockFetchResponse(true, { ok: true, name: 'alice' }))
+            .mockResolvedValueOnce(mockFetchResponse(false, { error: 'not found' }, 404))
+            .mockResolvedValueOnce(mockFetchResponse(false, { error: 'not found' }, 404))
             .mockResolvedValueOnce(mockFetchResponse(true, { challenge: 'did:cid:challenge-2' }))
-            .mockResolvedValueOnce(mockFetchResponse(true, { ok: true, name: 'alice2' }));
+            .mockResolvedValueOnce(mockFetchResponse(true, { ok: true, name: 'alice2' }))
+            .mockResolvedValueOnce(mockFetchResponse(false, { error: 'not found' }, 404))
+            .mockResolvedValueOnce(mockFetchResponse(false, { error: 'not found' }, 404));
 
         await keymaster.addAddress('alice@archon.social');
         jest.setSystemTime(new Date('2026-04-04T14:05:00.000Z'));
@@ -462,5 +524,99 @@ describe('removeAddress', () => {
             'https://archon.social/api/name',
             expect.objectContaining({ method: 'DELETE' }),
         );
+    });
+});
+
+describe('publishAddress', () => {
+    it('should publish one stored address as profile data without an Email service endpoint when no relay is stored', async () => {
+        const did = await keymaster.createId('Alice');
+        const walletData = await keymaster.loadWallet();
+        walletData.ids.Alice.addresses = {
+            'archon.social': {
+                name: 'alice',
+                added: '2026-04-04T13:00:00.000Z',
+            },
+        };
+        await keymaster.saveWallet(walletData, true);
+
+        const ok = await keymaster.publishAddress('alice@archon.social');
+        const doc = await keymaster.resolveDID(did);
+
+        expect(ok).toBe(true);
+        expect(doc.didDocumentData).toMatchObject({
+            address: 'alice@archon.social',
+        });
+        expect(doc.didDocument?.service).toBeUndefined();
+    });
+
+    it('should publish an Email service endpoint when the stored address has a relay', async () => {
+        const did = await keymaster.createId('Alice');
+        const relay = await keymaster.createId('Herald');
+        await keymaster.setCurrentId('Alice');
+        const walletData = await keymaster.loadWallet();
+        walletData.ids.Alice.addresses = {
+            'archon.social': {
+                name: 'alice',
+                added: '2026-04-04T13:00:00.000Z',
+                relay,
+            },
+        };
+        await keymaster.saveWallet(walletData, true);
+
+        const ok = await keymaster.publishAddress('alice@archon.social');
+        const doc = await keymaster.resolveDID(did);
+
+        expect(ok).toBe(true);
+        expect(doc.didDocumentData).toMatchObject({
+            address: 'alice@archon.social',
+        });
+        expect(doc.didDocument?.service).toContainEqual({
+            id: `${did}#email`,
+            type: 'Email',
+            serviceEndpoint: 'mailto:alice@archon.social',
+        });
+    });
+
+    it('should reject publishing an address that is not stored for the ID', async () => {
+        await keymaster.createId('Alice');
+
+        await expect(keymaster.publishAddress('alice@archon.social')).rejects.toThrow('Invalid parameter: address');
+    });
+
+    it('should unpublish the address and preserve unrelated service endpoints', async () => {
+        const did = await keymaster.createId('Alice');
+        const relay = await keymaster.createId('Herald');
+        await keymaster.setCurrentId('Alice');
+        const walletData = await keymaster.loadWallet();
+        walletData.ids.Alice.addresses = {
+            'archon.social': {
+                name: 'alice',
+                added: '2026-04-04T13:00:00.000Z',
+                relay,
+            },
+        };
+        await keymaster.saveWallet(walletData, true);
+        await keymaster.publishAddress('alice@archon.social');
+
+        let doc = await keymaster.resolveDID(did);
+        doc.didDocument!.service!.push({
+            id: `${did}#example`,
+            type: 'Example',
+            serviceEndpoint: 'https://example.com',
+        });
+        await keymaster.updateDID(did, { didDocument: doc.didDocument });
+
+        const ok = await keymaster.unpublishAddress();
+        doc = await keymaster.resolveDID(did);
+
+        expect(ok).toBe(true);
+        expect(doc.didDocumentData).not.toHaveProperty('address');
+        expect(doc.didDocument?.service).toStrictEqual([
+            {
+                id: `${did}#example`,
+                type: 'Example',
+                serviceEndpoint: 'https://example.com',
+            },
+        ]);
     });
 });

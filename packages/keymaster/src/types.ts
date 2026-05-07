@@ -44,6 +44,7 @@ export interface StoredNostrInfo {
 export interface StoredAddressInfo {
     name: string;
     added: string;
+    relay?: string;
     [key: string]: any;
 }
 
@@ -395,6 +396,8 @@ export interface KeymasterInterface {
     checkAddress(address: string): Promise<AddressCheckResult>;
     addAddress(address: string): Promise<boolean>;
     removeAddress(address: string): Promise<boolean>;
+    publishAddress(address?: string, name?: string): Promise<boolean>;
+    unpublishAddress(name?: string): Promise<boolean>;
 
     // Nostr
     addNostr(id?: string): Promise<NostrKeys>;

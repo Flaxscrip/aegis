@@ -24,6 +24,8 @@ These rules apply to coding agents working in this repository.
 - When generating or updating npm lockfiles, use the repo-pinned npm version from the root `package.json` so lockfiles stay compatible with CI.
 - Internal service-to-service admin auth should use `X-Archon-Admin-Key` consistently. Reserve `Authorization` for user/session/OAuth-style flows unless a file explicitly documents a different scheme.
 - For Herald agent guidance, prefer Keymaster address commands (`check-address`, `add-address`, `remove-address`, etc.) in quick starts while keeping direct API endpoint documentation available for lower-level integrations.
+- Keymaster address metadata should stay in parity across TypeScript and Python implementations; when Herald exposes a domain relay agent, store it with the address as `relay` and surface it through list/get address APIs.
+- Publishing a Keymaster address always sets `didDocumentData.address`; it adds the `#email` service endpoint with `type: "Email"` and `serviceEndpoint: "mailto:<address>"` only when the stored address has a Herald `relay`. Unpublishing removes both the property and the service.
 - After a PR is merged, always do the standard local cleanup unless the user says otherwise: switch to `main`, fast-forward from `origin/main`, and delete the merged local branch.
 - Do not use stash-based branch juggling as the default workflow.
 - Never run mutating git operations in parallel. Serialize `git add`, `git commit`, `git push`, branch moves, stash operations, and any command that writes to `.git`.
@@ -35,3 +37,4 @@ These rules apply to coding agents working in this repository.
 - Python keymaster flavor runs in CLI CI use `ARCHON_KEYMASTER_DB=redis` exactly like the TypeScript service; no override is needed.
 - The Python keymaster service MUST be a drop-in replacement for the TypeScript keymaster. `docker-compose.keymaster-py.yml` and `docker-compose.keymaster-ts.yml` must agree on env, ports, healthcheck behaviour, volumes, and `user:` overrides. The data dir is a host bind mount of `./data` running as `${ARCHON_UID}:${ARCHON_GID}`, identical to the ts flavor — do not switch py to a named volume to dodge UID issues; fix the UID setup instead.
 - For Python package publishing prep, build and check artifacts locally, but do not upload to TestPyPI or PyPI unless the user explicitly asks for publication.
+- When reproducing Python CI checks locally, prefer the repo `.venv` Python so helper scripts and imports run in the same prepared environment.

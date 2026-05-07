@@ -75,6 +75,7 @@ function normalizePath(path: string): string {
         .replace(/\/aliases\/[^/]+/g, '/aliases/:alias')
         .replace(/\/addresses\/check\/[^/]+/g, '/addresses/check/:address')
         .replace(/\/addresses\/import/g, '/addresses/import')
+        .replace(/\/addresses\/publish/g, '/addresses/publish')
         .replace(/\/addresses\/[^/]+/g, '/addresses/:address')
         .replace(/\/groups\/[^/]+/g, '/groups/:name')
         .replace(/\/schemas\/[^/]+/g, '/schemas/:id')
@@ -1989,6 +1990,101 @@ v1router.post('/addresses', async (req, res) => {
     try {
         const { address } = req.body;
         const ok = await keymaster.addAddress(address);
+        res.json({ ok });
+    } catch (error: any) {
+        res.status(400).send({ error: error.toString() });
+    }
+});
+
+/**
+ * @swagger
+ * /addresses/publish:
+ *   post:
+ *     summary: Publish a stored address to the current identity DID document.
+ *     description: Sets `didDocumentData.address` to the selected stored address. If the stored address has a Herald relay, also publishes an `Email` DID service endpoint using `mailto:<address>`.
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               address:
+ *                 type: string
+ *                 description: Optional `name@domain` address to publish. Required when the identity has more than one stored address.
+ *               name:
+ *                 type: string
+ *                 description: Optional identity name. Defaults to the current identity.
+ *     responses:
+ *       200:
+ *         description: Indicates whether the address was successfully published.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *       400:
+ *         description: Bad request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ */
+v1router.post('/addresses/publish', async (req, res) => {
+    try {
+        const { address, name } = req.body || {};
+        const ok = await keymaster.publishAddress(address, name);
+        res.json({ ok });
+    } catch (error: any) {
+        res.status(400).send({ error: error.toString() });
+    }
+});
+
+/**
+ * @swagger
+ * /addresses/publish:
+ *   delete:
+ *     summary: Remove the published address from the current identity DID document.
+ *     description: Removes `didDocumentData.address` and the `#email` DID service endpoint from the selected identity.
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Optional identity name. Defaults to the current identity.
+ *     responses:
+ *       200:
+ *         description: Indicates whether the address was successfully unpublished.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *       400:
+ *         description: Bad request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ */
+v1router.delete('/addresses/publish', async (req, res) => {
+    try {
+        const { name } = req.body || {};
+        const ok = await keymaster.unpublishAddress(name);
         res.json({ ok });
     } catch (error: any) {
         res.status(400).send({ error: error.toString() });
