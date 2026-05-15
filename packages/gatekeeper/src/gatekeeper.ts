@@ -36,14 +36,12 @@ function base64urlToHex(b64: string): string {
 
 const ValidVersions = [1];
 const ValidTypes = ['agent', 'asset'];
-// Registries that are considered valid when importing DIDs from the network
-const ValidRegistries = [
-    'local',
-    'hyperswarm',
-    'BTC:mainnet',
-    'BTC:testnet4',
-    'BTC:signet',
-];
+function isValidRegistryName(registry: unknown): registry is string {
+    return typeof registry === 'string' &&
+        registry.length > 0 &&
+        registry.length <= 128 &&
+        /^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(registry);
+}
 
 enum ImportStatus {
     ADDED = 'added',
@@ -94,7 +92,7 @@ export default class Gatekeeper implements GatekeeperInterface {
         this.supportedRegistries = options.registries || ['local', 'hyperswarm'];
 
         for (const registry of this.supportedRegistries) {
-            if (!ValidRegistries.includes(registry)) {
+            if (!isValidRegistryName(registry)) {
                 throw new InvalidParameterError(`registry=${registry}`);
             }
         }
@@ -414,7 +412,7 @@ export default class Gatekeeper implements GatekeeperInterface {
             throw new InvalidOperationError(`registration.type=${operation.registration.type}`);
         }
 
-        if (!ValidRegistries.includes(operation.registration.registry)) {
+        if (!isValidRegistryName(operation.registration.registry)) {
             throw new InvalidOperationError(`registration.registry=${operation.registration.registry}`);
         }
 
@@ -591,7 +589,7 @@ export default class Gatekeeper implements GatekeeperInterface {
                 return {};
             }
 
-            if (!ValidRegistries.includes(anchor.registration.registry)) {
+            if (!isValidRegistryName(anchor.registration.registry)) {
                 return {};
             }
 
@@ -1224,7 +1222,7 @@ export default class Gatekeeper implements GatekeeperInterface {
                 return false;
             }
 
-            if (!ValidRegistries.includes(operation.registration.registry)) {
+            if (!isValidRegistryName(operation.registration.registry)) {
                 return false;
             }
 
@@ -1365,7 +1363,7 @@ export default class Gatekeeper implements GatekeeperInterface {
     }
 
     async getQueue(registry: string): Promise<Operation[]> {
-        if (!ValidRegistries.includes(registry)) {
+        if (!isValidRegistryName(registry)) {
             throw new InvalidParameterError(`registry=${registry}`);
         }
 
@@ -1377,7 +1375,7 @@ export default class Gatekeeper implements GatekeeperInterface {
     }
 
     async clearQueue(registry: string, events: Operation[]): Promise<boolean> {
-        if (!ValidRegistries.includes(registry)) {
+        if (!isValidRegistryName(registry)) {
             throw new InvalidParameterError(`registry=${registry}`);
         }
 
@@ -1385,7 +1383,7 @@ export default class Gatekeeper implements GatekeeperInterface {
     }
 
     async getBlock(registry: string, block?: BlockId): Promise<BlockInfo | null> {
-        if (!ValidRegistries.includes(registry)) {
+        if (!isValidRegistryName(registry)) {
             throw new InvalidParameterError(`registry=${registry}`);
         }
 
@@ -1393,7 +1391,7 @@ export default class Gatekeeper implements GatekeeperInterface {
     }
 
     async addBlock(registry: string, block: BlockInfo): Promise<boolean> {
-        if (!ValidRegistries.includes(registry)) {
+        if (!isValidRegistryName(registry)) {
             throw new InvalidParameterError(`registry=${registry}`);
         }
 
