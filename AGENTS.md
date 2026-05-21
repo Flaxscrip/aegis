@@ -20,7 +20,7 @@ These rules apply to coding agents working in this repository.
 - Always save lessons learned in this file or another persistent repo instruction file. Do not rely on session memory for process corrections.
 - Herald avatar/image handlers that use `KeymasterClient` should normalize JSON-serialized Buffer payloads (`{ type: "Buffer", data: [...] }`) back into real `Buffer` instances before sending binary responses.
 - Keep `apps/gatekeeper-client/src/KeymasterUI.jsx` and `apps/keymaster-client/src/KeymasterUI.jsx` identical. When one changes, update the other to match rather than maintaining intentional drift.
-- For GitHub operations in this repo, prefer `gh` by default, especially for write actions. Do not try the GitHub app first and then fall back to `gh` unless there is a clear reason to use the app.
+- For GitHub operations in this repo, use `gh` by default, especially for write actions and PR creation. Do not try the GitHub app first and then fall back to `gh` unless the user explicitly asks for the app or `gh` cannot perform the operation.
 - When generating or updating npm lockfiles, use the repo-pinned npm version from the root `package.json` so lockfiles stay compatible with CI.
 - Internal service-to-service admin auth should use `X-Archon-Admin-Key` consistently. Reserve `Authorization` for user/session/OAuth-style flows unless a file explicitly documents a different scheme.
 - For Herald agent guidance, prefer Keymaster address commands (`check-address`, `add-address`, `remove-address`, etc.) in quick starts while keeping direct API endpoint documentation available for lower-level integrations.
@@ -48,3 +48,4 @@ These rules apply to coding agents working in this repository.
 - Rust Gatekeeper timestamp upper bounds must come from event-level blockchain registration metadata (`height`, `txid`, `batch`, `opidx`), not DID operation registration (`version`, `type`, `registry`).
 - Zcash mediator Grafana dashboards should mirror the Satoshi mediator layout, but use `zcash_*` mediator metrics, `wallet_balance_*_zec`, and `wallet_fee_estimate_zat_per_vb` for the ZEC wallet.
 - Release version bumps must include every runtime flavor and client package, not only JavaScript services: root `package.json`/`package-lock.json`, Rust Gatekeeper `Cargo.toml`/`Cargo.lock`, Python Keymaster service metadata, Python SDK metadata, and any service/app `package.json` files that report `/version` or `service_version_info`.
+- Ethereum Archon registries should use one canonical `ArchonRegistry` contract per registry name (for example `ETH:sepolia`); custom/private deployments need distinct registry naming or explicit non-canonical configuration to avoid fragmenting discovery.
