@@ -18,6 +18,16 @@ const ipfs = new HeliaClient();
 const gatekeeper = new Gatekeeper({ db, ipfs, console: mockConsole, registries: ['local', 'hyperswarm', 'BTC:signet'] });
 const helper = new TestHelper(gatekeeper, cipher);
 
+function newGatekeeper(registries: string[], registriesPin: string[] = []): Gatekeeper {
+    return new Gatekeeper({
+        db: new DbJsonMemory('test'),
+        ipfs,
+        console: mockConsole,
+        registries,
+        registriesPin,
+    });
+}
+
 beforeAll(async () => {
     await ipfs.start();
 });
@@ -63,6 +73,111 @@ describe('getQueue', () => {
             // eslint-disable-next-line
             expect(error.message).toBe('Invalid parameter: registry=mock registry');
         }
+    });
+});
+
+describe('pin queue', () => {
+
+    it('should queue non-local operations to pin when pin queue is supported', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'BTC:signet', 'pin'], ['BTC:signet']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const registry = 'BTC:signet';
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry });
+
+        await gk.createDID(agentOp);
+
+        expect(await gk.getQueue(registry)).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('hyperswarm')).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('pin')).toStrictEqual([agentOp]);
+    });
+
+    it('should queue non-local operations to pin after mediator self-registers', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'BTC:signet'], ['BTC:signet']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const registry = 'BTC:signet';
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry });
+
+        expect(await gk.getQueue('pin')).toStrictEqual([]);
+        await gk.createDID(agentOp);
+
+        expect(await gk.getQueue(registry)).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('pin')).toStrictEqual([agentOp]);
+    });
+
+    it('should not queue operations to pin when unsupported', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'BTC:signet'], ['BTC:signet']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const registry = 'BTC:signet';
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry });
+
+        await gk.createDID(agentOp);
+
+        expect(await gk.getQueue(registry)).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('pin')).toStrictEqual([]);
+    });
+
+    it('should not queue operations to pin when registry is not in the pin list', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'BTC:signet', 'pin'], ['ZEC:mainnet']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const registry = 'BTC:signet';
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry });
+
+        await gk.createDID(agentOp);
+
+        expect(await gk.getQueue(registry)).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('hyperswarm')).toStrictEqual([agentOp]);
+        expect(await gk.getQueue('pin')).toStrictEqual([]);
+    });
+
+    it('should not queue local operations to pin', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'pin']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry: 'local' });
+
+        await gk.createDID(agentOp);
+
+        expect(await gk.getQueue('hyperswarm')).toStrictEqual([]);
+        expect(await gk.getQueue('pin')).toStrictEqual([]);
+    });
+
+    it('should not queue ephemeral operations to pin', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'BTC:signet', 'pin'], ['BTC:signet']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const registry = 'BTC:signet';
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry });
+        const agent = await gk.createDID(agentOp);
+        const assetOp = await testHelper.createAssetOp(agent, keypair, {
+            registry,
+            validUntil: '2026-12-31T00:00:00Z',
+        });
+
+        await gk.createDID(assetOp);
+
+        expect(await gk.getQueue(registry)).toStrictEqual([agentOp, assetOp]);
+        expect(await gk.getQueue('hyperswarm')).toStrictEqual([agentOp, assetOp]);
+        expect(await gk.getQueue('pin')).toStrictEqual([agentOp]);
+    });
+
+    it('should reject pin as a DID registry', async () => {
+        const gk = newGatekeeper(['local', 'hyperswarm', 'pin']);
+        await gk.resetDb();
+        const testHelper = new TestHelper(gk, cipher);
+        const keypair = cipher.generateRandomJwk();
+        const agentOp = await testHelper.createAgentOp(keypair, { version: 1, registry: 'pin' });
+
+        await expect(gk.createDID(agentOp)).rejects.toThrow('Invalid operation: registry pin is auxiliary storage only');
     });
 });
 

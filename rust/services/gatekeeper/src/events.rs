@@ -13,6 +13,8 @@ use crate::{
     GatekeeperDb, ResolveOptions,
 };
 
+const PIN_QUEUE: &str = "pin";
+
 #[derive(Serialize)]
 pub(crate) struct ImportBatchResult {
     pub(crate) queued: usize,
@@ -152,31 +154,46 @@ pub(crate) async fn handle_did_operation(
 
     let supported_registries = state.supported_registries.lock().await.clone();
     let mut resolved_registry: Option<String> = None;
+    let is_ephemeral: bool;
     if op_type == "create" {
         let registry = payload
             .get("registration")
             .and_then(|value| value.get("registry"))
             .and_then(Value::as_str)
             .ok_or_else(|| "missing operation.registration.registry".to_string())?;
+        is_ephemeral = payload
+            .get("registration")
+            .and_then(|value| value.get("validUntil"))
+            .is_some();
+        if registry == PIN_QUEUE {
+            return Err(format!(
+                "Invalid operation: registry {registry} is auxiliary storage only"
+            ));
+        }
         if !supported_registries.iter().any(|item| item == registry) {
             return Err(format!("Invalid operation: registry {registry} not supported"));
         }
     } else {
-        let current_registry = {
+        let current_info = {
             let store = state.store.lock().await;
             store
                 .resolve_doc(&state.config, &did, ResolveOptions::default())
                 .ok()
                 .and_then(|doc| {
-                    doc.get("didDocumentRegistration")
-                        .and_then(|value| value.get("registry"))
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string)
+                    let registration = doc.get("didDocumentRegistration")?;
+                    let registry = registration.get("registry")?.as_str()?.to_string();
+                    Some((registry, registration.get("validUntil").is_some()))
                 })
         };
 
-        let current_registry = current_registry
+        let (current_registry, current_is_ephemeral) = current_info
             .ok_or_else(|| "Invalid operation: registry missing".to_string())?;
+        is_ephemeral = current_is_ephemeral;
+        if current_registry == PIN_QUEUE {
+            return Err(format!(
+                "Invalid operation: registry {current_registry} is auxiliary storage only"
+            ));
+        }
         if !supported_registries.iter().any(|item| item == &current_registry) {
             return Err(format!(
                 "Invalid operation: registry {current_registry} not supported"
@@ -189,6 +206,11 @@ pub(crate) async fn handle_did_operation(
             .and_then(|value| value.get("registry"))
             .and_then(Value::as_str);
         if let Some(new_registry) = new_registry {
+            if new_registry == PIN_QUEUE {
+                return Err(format!(
+                    "Invalid operation: registry {new_registry} is auxiliary storage only"
+                ));
+            }
             if new_registry != current_registry
                 && !supported_registries.iter().any(|item| item == new_registry)
             {
@@ -247,7 +269,7 @@ pub(crate) async fn handle_did_operation(
     .await?;
 
     if let Some(registry) = queue_registry {
-        let _ = queue_outbound_operation(state, &registry, payload.clone()).await;
+        let _ = queue_outbound_operation(state, &registry, payload.clone(), is_ephemeral).await;
     }
     // Invalidate the cached status snapshot so the next /status request
     // recomputes DID counts lazily instead of doing a full database scan
@@ -280,24 +302,44 @@ pub(crate) async fn queue_outbound_operation(
     state: &AppState,
     registry: &str,
     operation: Value,
+    skip_pin: bool,
 ) -> Result<()> {
     if registry == "local" {
         return Ok(());
     }
 
     let queue_size = {
+        let pin_enabled = state
+            .supported_registries
+            .lock()
+            .await
+            .iter()
+            .any(|item| item == PIN_QUEUE);
         let mut store = state.store.lock().await;
         let _ = store.queue_operation("hyperswarm", operation.clone())?;
-        if registry != "hyperswarm" {
-            Some(store.queue_operation(registry, operation)?)
+        let pin_queue_size = if !skip_pin
+            && pin_enabled
+            && state.config.pin_registries.iter().any(|item| item == registry)
+            && registry != PIN_QUEUE
+        {
+            Some(store.queue_operation(PIN_QUEUE, operation.clone())?)
         } else {
             None
+        };
+        if registry != "hyperswarm" {
+            (Some(store.queue_operation(registry, operation)?), pin_queue_size)
+        } else {
+            (None, pin_queue_size)
         }
     };
 
-    if queue_size.is_some_and(|size| size >= state.config.max_queue_size) {
+    if queue_size.0.is_some_and(|size| size >= state.config.max_queue_size) {
         let mut supported = state.supported_registries.lock().await;
         supported.retain(|item| item != registry);
+    }
+    if queue_size.1.is_some_and(|size| size >= state.config.max_queue_size) {
+        let mut supported = state.supported_registries.lock().await;
+        supported.retain(|item| item != PIN_QUEUE);
     }
 
     Ok(())
