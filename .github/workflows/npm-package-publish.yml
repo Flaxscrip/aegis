@@ -19,6 +19,7 @@ on:
         required: true
         type: choice
         options:
+          - current
           - patch
           - minor
           - major
@@ -38,7 +39,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   publish:
@@ -86,24 +86,57 @@ jobs:
         continue-on-error: false
 
       - name: Version packages
+        if: ${{ github.event.inputs.version != 'current' }}
         run: |
-          SCOPE_FLAG=""
-          if [ "${{ github.event.inputs.package }}" != "all" ]; then
-            SCOPE_FLAG="--scope ${{ github.event.inputs.package }}"
+          # A manual dispatch is a deliberate request to bump and tag, even when
+          # lerna detects no source changes since the last release tags
+          # (otherwise lerna versions nothing and `publish from-git` finds no tag).
+          if [ "${{ github.event.inputs.package }}" = "all" ]; then
+            FORCE_FLAG="--force-publish"
+          else
+            FORCE_FLAG="--force-publish ${{ github.event.inputs.package }}"
           fi
 
           if [[ "${{ github.event.inputs.version }}" == pre* ]]; then
-            npx lerna version ${{ github.event.inputs.version }} --preid ${{ github.event.inputs.preid }} --yes --no-private $SCOPE_FLAG
+            npx lerna version ${{ github.event.inputs.version }} --preid ${{ github.event.inputs.preid }} --yes --no-private $FORCE_FLAG
           else
-            npx lerna version ${{ github.event.inputs.version }} --yes --no-private $SCOPE_FLAG
+            npx lerna version ${{ github.event.inputs.version }} --yes --no-private $FORCE_FLAG
           fi
+
+      - name: Checkout current release tags
+        if: ${{ github.event.inputs.version == 'current' }}
+        run: |
+          PACKAGE="${{ github.event.inputs.package }}"
+          if [ "$PACKAGE" = "all" ]; then
+            PACKAGE="@didcid/common"
+          fi
+
+          PACKAGE_DIR="${PACKAGE##*/}"
+          VERSION="$(node -p "require('./packages/${PACKAGE_DIR}/package.json').version")"
+          TAG="${PACKAGE}@${VERSION}"
+          RELEASE_COMMIT="$(git rev-list -n 1 "$TAG")"
+
+          echo "Publishing from $TAG at $RELEASE_COMMIT"
+          git checkout --detach "$RELEASE_COMMIT"
 
       - name: Publish to NPM
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_ACCESS: public
         run: |
+          # Detect a no-op publish from lerna's own output: when there is no
+          # tagged release it prints "No changed packages to publish" and exits
+          # 0, which we must treat as a failure. (lerna 9's --summary-file is
+          # unreliable here — it stays empty even on a successful publish.)
+          set -o pipefail
+          PUBLISH_LOG="$(mktemp)"
           if [[ "${{ github.event.inputs.version }}" == pre* ]]; then
-            npx lerna publish from-git --dist-tag ${{ github.event.inputs.preid }} --yes -- --provenance --access public
+            npx lerna publish from-git --dist-tag ${{ github.event.inputs.preid }} --yes --registry https://registry.npmjs.org 2>&1 | tee "$PUBLISH_LOG"
           else
-            npx lerna publish from-git --yes -- --provenance --access public
+            npx lerna publish from-git --yes --registry https://registry.npmjs.org 2>&1 | tee "$PUBLISH_LOG"
+          fi
+
+          if ! grep -q "lerna success published" "$PUBLISH_LOG"; then
+            echo "Lerna did not publish any packages."
+            exit 1
           fi
