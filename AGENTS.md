@@ -26,6 +26,7 @@ These rules apply to coding agents working in this repository.
 - Drawbridge's bundled Tor SOCKS host port should default to `127.0.0.1:9050`; internal services should keep using the Docker network address `tor:9050`.
 - Keymaster's Docker host port should default to localhost via `ARCHON_KEYMASTER_HOST_BIND=127.0.0.1`; internal services should keep using `keymaster:4226`.
 - For Herald agent guidance, prefer Keymaster address commands (`check-address`, `add-address`, `remove-address`, etc.) in quick starts while keeping direct API endpoint documentation available for lower-level integrations.
+- Bundled LNbits may start before CLN REST is ready after CLN startup or sync; keep the CLN REST startup wait configurable and long enough for cold starts.
 - Keymaster address metadata should stay in parity across TypeScript and Python implementations; when Herald exposes a domain relay agent, store it with the address as `relay` and surface it through list/get address APIs.
 - Keymaster CLI command additions should keep `scripts/archon-cli.js`, `packages/keymaster/src/cli.ts`, and `python/keymaster/src/keymaster/cli.py` in parity; commands that only query Gatekeeper, such as registry listing, should not require an existing local wallet.
 - Publishing a Keymaster address always sets `didDocumentData.address`; it adds the `#email` service endpoint with `type: "Email"` and `serviceEndpoint: "mailto:<address>"` only when the stored address has a Herald `relay`. Unpublishing removes both the property and the service.
