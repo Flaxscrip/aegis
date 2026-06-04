@@ -1,4 +1,4 @@
-import BtcClient, { Block, BlockVerbose, BlockHeader, MempoolEntry } from 'bitcoin-core';
+import BtcClient, { Block, BlockHeader, MempoolEntry } from 'bitcoin-core';
 import CipherNode from '@didcid/cipher/node';
 import GatekeeperClient from '@didcid/gatekeeper/client';
 import KeymasterClient from '@didcid/keymaster/client';
@@ -14,6 +14,7 @@ import express from 'express';
 import { readFile } from 'fs/promises';
 import promClient from 'prom-client';
 import axios from 'axios';
+import { createHash } from 'crypto';
 
 const REGISTRY = config.chain;
 
@@ -50,6 +51,244 @@ const btcClient = new BtcClient({
         password: config.pass,
     }),
 });
+const fallbackBtcClient = config.fallbackRpcUrl
+    ? new BtcClient({ host: config.fallbackRpcUrl })
+    : undefined;
+
+type ChainReadClient = Pick<BtcClient, 'getBlockHash' | 'getBlock' | 'getBlockHeader' | 'getBlockCount'>;
+
+interface BlockchainInfo {
+    pruned?: boolean;
+    pruneheight?: number;
+}
+
+interface ParsedBlockTx {
+    txid: string;
+    opReturns: string[];
+}
+
+class HistoricalBlockDataUnavailableError extends Error {
+    constructor(description: string, primaryError: unknown, fallbackError?: unknown) {
+        const fallbackMessage = fallbackError
+            ? ` Fallback RPC also failed: ${fallbackError}`
+            : '';
+        super(`${description} unavailable from primary RPC: ${primaryError}.${fallbackMessage}`);
+        this.name = 'HistoricalBlockDataUnavailableError';
+    }
+}
+
+function fallbackRpcDescription(): string | undefined {
+    return config.fallbackRpcUrl ? maskUrl(config.fallbackRpcUrl) : undefined;
+}
+
+function isUnavailableBlockError(error: any): boolean {
+    if (error instanceof HistoricalBlockDataUnavailableError) {
+        return true;
+    }
+
+    const message = String(error?.message || error || '');
+    return message.includes('Block not available')
+        || message.includes('pruned data')
+        || message.includes('Block not found')
+        || message.includes('No such mempool or blockchain transaction');
+}
+
+async function withFallback<T>(description: string, operation: (client: ChainReadClient) => Promise<T>): Promise<T> {
+    try {
+        return await operation(btcClient);
+    } catch (error) {
+        if (!fallbackBtcClient || !isUnavailableBlockError(error)) {
+            throw error;
+        }
+
+        console.warn(`${description} unavailable from primary RPC (${error}); retrying fallback RPC ${fallbackRpcDescription()}`);
+        try {
+            return await operation(fallbackBtcClient);
+        } catch (fallbackError) {
+            throw new HistoricalBlockDataUnavailableError(description, error, fallbackError);
+        }
+    }
+}
+
+async function getChainBlockCount(): Promise<number> {
+    return withFallback('block count', client => client.getBlockCount());
+}
+
+async function getChainBlockHash(height: number): Promise<string> {
+    return withFallback(`block ${height}`, client => client.getBlockHash(height));
+}
+
+async function getChainBlockHeader(hash: string): Promise<BlockHeader> {
+    return withFallback(`block header ${hash}`, async (client) => await client.getBlockHeader(hash) as BlockHeader);
+}
+
+async function getChainBlockTxids(hash: string): Promise<Block> {
+    return withFallback(`block ${hash}`, async (client) => await client.getBlock(hash, BlockVerbosity.JSON) as Block);
+}
+
+async function getChainBlockHex(hash: string): Promise<string> {
+    return withFallback(`block ${hash}`, async (client) => await client.getBlock(hash, BlockVerbosity.HEX) as string);
+}
+
+function hash256(data: Buffer): Buffer {
+    return createHash('sha256').update(createHash('sha256').update(data).digest()).digest();
+}
+
+function readVarInt(buffer: Buffer, offset: number): { value: number; offset: number } {
+    const first = buffer[offset];
+    if (first === undefined) {
+        throw new Error('Unexpected end of block while reading varint');
+    }
+
+    if (first < 0xfd) {
+        return { value: first, offset: offset + 1 };
+    }
+
+    if (first === 0xfd) {
+        return { value: buffer.readUInt16LE(offset + 1), offset: offset + 3 };
+    }
+
+    if (first === 0xfe) {
+        return { value: buffer.readUInt32LE(offset + 1), offset: offset + 5 };
+    }
+
+    const value = buffer.readBigUInt64LE(offset + 1);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`Varint ${value} exceeds safe JavaScript integer range`);
+    }
+
+    return { value: Number(value), offset: offset + 9 };
+}
+
+function readPushData(script: Buffer, offset: number): { data: Buffer; offset: number } | undefined {
+    const opcode = script[offset];
+    if (opcode === undefined) {
+        return undefined;
+    }
+
+    let length: number;
+    let dataOffset = offset + 1;
+
+    if (opcode > 0 && opcode <= 0x4b) {
+        length = opcode;
+    } else if (opcode === 0x4c) {
+        length = script.readUInt8(dataOffset);
+        dataOffset += 1;
+    } else if (opcode === 0x4d) {
+        length = script.readUInt16LE(dataOffset);
+        dataOffset += 2;
+    } else if (opcode === 0x4e) {
+        length = script.readUInt32LE(dataOffset);
+        dataOffset += 4;
+    } else {
+        return undefined;
+    }
+
+    const nextOffset = dataOffset + length;
+    if (nextOffset > script.length) {
+        return undefined;
+    }
+
+    return { data: script.subarray(dataOffset, nextOffset), offset: nextOffset };
+}
+
+function extractOpReturnPushes(script: Buffer): string[] {
+    if (script[0] !== 0x6a) {
+        return [];
+    }
+
+    const pushes: string[] = [];
+    let offset = 1;
+
+    while (offset < script.length) {
+        const push = readPushData(script, offset);
+        if (!push) {
+            break;
+        }
+
+        pushes.push(push.data.toString('hex'));
+        offset = push.offset;
+    }
+
+    return pushes;
+}
+
+function parseRawTransaction(buffer: Buffer, offset: number): { tx: ParsedBlockTx; offset: number } {
+    const txStart = offset;
+    const versionEnd = txStart + 4;
+    offset = versionEnd;
+
+    const hasWitness = buffer[offset] === 0x00 && (buffer[offset + 1] ?? 0) !== 0x00;
+    if (hasWitness) {
+        offset += 2;
+    }
+
+    const vinStart = offset;
+    const vinCount = readVarInt(buffer, offset);
+    offset = vinCount.offset;
+
+    for (let input = 0; input < vinCount.value; input++) {
+        offset += 36;
+        const scriptLength = readVarInt(buffer, offset);
+        offset = scriptLength.offset + scriptLength.value + 4;
+    }
+
+    const voutCount = readVarInt(buffer, offset);
+    offset = voutCount.offset;
+    const opReturns: string[] = [];
+
+    for (let output = 0; output < voutCount.value; output++) {
+        offset += 8;
+        const scriptLength = readVarInt(buffer, offset);
+        offset = scriptLength.offset;
+        const script = buffer.subarray(offset, offset + scriptLength.value);
+        opReturns.push(...extractOpReturnPushes(script));
+        offset += scriptLength.value;
+    }
+
+    const voutEnd = offset;
+
+    if (hasWitness) {
+        for (let input = 0; input < vinCount.value; input++) {
+            const itemCount = readVarInt(buffer, offset);
+            offset = itemCount.offset;
+            for (let item = 0; item < itemCount.value; item++) {
+                const itemLength = readVarInt(buffer, offset);
+                offset = itemLength.offset + itemLength.value;
+            }
+        }
+    }
+
+    const locktimeStart = offset;
+    offset += 4;
+
+    const noWitnessTx = hasWitness
+        ? Buffer.concat([
+            buffer.subarray(txStart, versionEnd),
+            buffer.subarray(vinStart, voutEnd),
+            buffer.subarray(locktimeStart, locktimeStart + 4),
+        ])
+        : buffer.subarray(txStart, offset);
+    const txid = Buffer.from(hash256(noWitnessTx)).reverse().toString('hex');
+
+    return { tx: { txid, opReturns }, offset };
+}
+
+function parseRawBlockTransactions(hex: string): ParsedBlockTx[] {
+    const buffer = Buffer.from(hex, 'hex');
+    let offset = 80;
+    const txCount = readVarInt(buffer, offset);
+    offset = txCount.offset;
+    const txs: ParsedBlockTx[] = [];
+
+    for (let index = 0; index < txCount.value; index++) {
+        const parsed = parseRawTransaction(buffer, offset);
+        txs.push(parsed.tx);
+        offset = parsed.offset;
+    }
+
+    return txs;
+}
 
 // Wallet service API helpers
 function walletHeaders(): Record<string, string> {
@@ -265,7 +504,7 @@ async function getBlockTxCount(hash: string, header?: BlockHeader): Promise<numb
         return header.nTx;
     }
 
-    const block = await btcClient.getBlock(hash, BlockVerbosity.JSON) as Block;
+    const block = await getChainBlockTxids(hash);
     return Array.isArray(block.tx) ? block.tx.length : 0;
 }
 
@@ -278,7 +517,7 @@ async function resolveScanStart(blockCount: number): Promise<number> {
 
     let header: BlockHeader | undefined;
     try {
-        header = await btcClient.getBlockHeader(db.hash) as BlockHeader;
+        header = await getChainBlockHeader(db.hash);
     } catch { }
 
     if ((header?.confirmations ?? 0) > 0) {
@@ -295,7 +534,7 @@ async function resolveScanStart(blockCount: number): Promise<number> {
     while (hash && height >= config.startBlock) {
         let currentHeader: BlockHeader;
         try {
-            currentHeader = await btcClient.getBlockHeader(hash) as BlockHeader;
+            currentHeader = await getChainBlockHeader(hash);
         } catch {
             break;
         }
@@ -333,8 +572,8 @@ async function resolveScanStart(blockCount: number): Promise<number> {
     let fallbackTime = '';
 
     try {
-        fallbackHash = await btcClient.getBlockHash(fallbackHeight);
-        const fallbackHeader = await btcClient.getBlockHeader(fallbackHash) as BlockHeader;
+        fallbackHash = await getChainBlockHash(fallbackHeight);
+        const fallbackHeader = await getChainBlockHeader(fallbackHash);
         fallbackTime = fallbackHeader.time ? new Date(fallbackHeader.time * 1000).toISOString() : '';
     } catch {
         fallbackHash = '';
@@ -423,32 +662,24 @@ function updateDiscoveredItems(db: MediatorDb, update: DiscoveredItem): void {
 
 async function fetchBlock(height: number, blockCount: number): Promise<void> {
     try {
-        const blockHash = await btcClient.getBlockHash(height);
-        const block = await btcClient.getBlock(blockHash, BlockVerbosity.JSON_TX_DATA) as BlockVerbose;
-        const timestamp = new Date(block.time * 1000).toISOString();
+        const blockHash = await getChainBlockHash(height);
+        const header = await getChainBlockHeader(blockHash);
+        const blockHex = await getChainBlockHex(blockHash);
+        const transactions = parseRawBlockTransactions(blockHex);
+        const blockTime = header.time ?? 0;
+        const timestamp = new Date(blockTime * 1000).toISOString();
 
-        for (let i = 0; i < block.tx.length; i++) {
-            const tx = block.tx[i];
-            const txid = tx.txid;
+        for (let index = 0; index < transactions.length; index++) {
+            const tx = transactions[index];
 
-            console.log(height, String(i).padStart(4), txid);
+            console.log(height, String(index).padStart(4), tx.txid);
 
-            for (const vout of tx.vout ?? []) {
-                const asm = vout.scriptPubKey?.asm;
-                if (!asm) {
-                    continue;
-                }
-
-                const parts = asm.split(' ');
-                if (parts[0] !== 'OP_RETURN' || !parts[1]) {
-                    continue;
-                }
-
+            for (const opReturn of tx.opReturns) {
                 try {
-                    const textString = Buffer.from(parts[1], 'hex').toString('utf8');
+                    const textString = Buffer.from(opReturn, 'hex').toString('utf8');
                     if (textString.startsWith('did:cid:') && isValidDID(textString)) {
                         await jsonPersister.updateDb((db) => {
-                            const item = { height, index: i, time: timestamp, txid, did: textString };
+                            const item = { height, index, time: timestamp, txid: tx.txid, did: textString };
                             const itemKey = discoveredKey(item);
 
                             if (!db.discovered.some(discovered => discoveredKey(discovered) === itemKey)) {
@@ -467,19 +698,22 @@ async function fetchBlock(height: number, blockCount: number): Promise<void> {
             db.hash = blockHash;
             db.time = timestamp;
             db.blocksScanned = height - config.startBlock + 1;
-            db.txnsScanned += block.tx.length;
+            db.txnsScanned += transactions.length;
             db.blockCount = blockCount;
             db.blocksPending = blockCount - height;
         });
-        await addBlock(height, blockHash, block.time);
+        await addBlock(height, blockHash, blockTime);
 
     } catch (error) {
-        console.error(`Error fetching block: ${error}`);
+        if (isUnavailableBlockError(error)) {
+            throw new Error(`Cannot fetch block ${height}; primary RPC is missing historical block data${fallbackBtcClient ? ' and fallback RPC could not provide it' : ' and ARCHON_SAT_FALLBACK_RPC_URL is unset'}: ${error}`);
+        }
+        throw new Error(`Cannot fetch block ${height}: ${error}`);
     }
 }
 
 async function scanBlocks(): Promise<void> {
-    let blockCount = await btcClient.getBlockCount();
+    let blockCount = await getChainBlockCount();
 
     console.log(`current block height: ${blockCount}`);
 
@@ -488,7 +722,7 @@ async function scanBlocks(): Promise<void> {
     for (let height = start; height <= blockCount; height++) {
         console.log(`${height}/${blockCount} blocks (${formatSyncProgress(height, blockCount)}%)`);
         await fetchBlock(height, blockCount);
-        blockCount = await btcClient.getBlockCount();
+        blockCount = await getChainBlockCount();
     }
 }
 
@@ -818,7 +1052,7 @@ async function anchorBatch(): Promise<void> {
 
                 if (ok) {
                     satoshiBatchesAnchored.inc();
-                    const blockCount = await btcClient.getBlockCount();
+                    const blockCount = await getChainBlockCount();
                     await jsonPersister.updateDb(async (db) => {
                         (db.registered ??= []).push({
                             did,
@@ -855,7 +1089,7 @@ async function importLoop(): Promise<void> {
         await importBatches();
         await retryFailedImports();
     } catch (error: any) {
-        console.error(`Error in importLoop: ${error.error || JSON.stringify(error)}`);
+        console.error(`Error in importLoop: ${error.message || error.error || JSON.stringify(error)}`);
     } finally {
         importRunning = false;
         console.log(`import loop waiting ${config.importInterval} minute(s)...`);
@@ -892,6 +1126,10 @@ async function waitForChain() {
         try {
             const blockchainInfo = await btcClient.getBlockchainInfo();
             console.log("Blockchain Info:", JSON.stringify(blockchainInfo, null, 4));
+            const info = blockchainInfo as BlockchainInfo;
+            if (info.pruned && typeof info.pruneheight === 'number' && config.startBlock < info.pruneheight && !fallbackBtcClient) {
+                console.warn(`${config.chain} primary RPC is pruned at height ${info.pruneheight}, but start block is ${config.startBlock} and ARCHON_SAT_FALLBACK_RPC_URL is unset. Missing historical blocks will not be recoverable from this node.`);
+            }
             isReady = true;
         } catch (error) {
             console.log(`Waiting for ${config.chain} node...`);
@@ -942,7 +1180,7 @@ function formatSyncProgress(height: number, blockCount: number): string {
 
 async function syncBlocks(): Promise<void> {
     try {
-        const blockCount = await btcClient.getBlockCount();
+        const blockCount = await getChainBlockCount();
         const latest = await gatekeeper.getBlock(REGISTRY);
 
         console.log(`current block height: ${blockCount}`);
@@ -972,8 +1210,8 @@ async function syncBlocks(): Promise<void> {
         }
 
         for (let height = startHeight; height <= blockCount; height++) {
-            const blockHash = await btcClient.getBlockHash(height);
-            const header = await btcClient.getBlockHeader(blockHash) as BlockHeader;
+            const blockHash = await getChainBlockHash(height);
+            const header = await getChainBlockHeader(blockHash);
             console.log(`${height}/${blockCount} blocks (${formatSyncProgress(height, blockCount)}%)`);
             await addBlock(height, blockHash, header.time!);
         }
