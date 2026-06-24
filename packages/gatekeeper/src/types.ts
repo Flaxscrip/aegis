@@ -1,4 +1,4 @@
-import { EcdsaJwkPublic } from '@didcid/cipher/types';
+import { EcdsaJwkPublic, OkpJwkPublic } from '@didcid/cipher/types';
 import { IPFSClient } from "@didcid/ipfs/types";
 
 export interface JsonDbFile {
@@ -221,6 +221,7 @@ export interface DrawbridgeInterface extends GatekeeperInterface {
     checkLightningPayment(invoiceKey: string, paymentHash: string): Promise<LightningPaymentStatus>;
     publishLightning(did: string, invoiceKey: string): Promise<{ ok: boolean; publicHost?: string }>;
     unpublishLightning(did: string): Promise<boolean>;
+    getDidCommEndpoint(): Promise<string | undefined>;
     zapLightning(adminKey: string, did: string, amount: number, memo?: string): Promise<LightningPayment>;
     getLightningPayments(adminKey: string): Promise<LightningPaymentRecord[]>;
 }
@@ -266,14 +267,17 @@ export interface DidCidDocument {
             id?: string,
             controller?: string,
             type?: string,
-            publicKeyJwk?: EcdsaJwkPublic,
+            publicKeyJwk?: EcdsaJwkPublic | OkpJwkPublic,
         }>,
         authentication?: string[],
         assertionMethod?: string[],
+        keyAgreement?: string[],
         service?: Array<{
             id: string;
             type: string;
-            serviceEndpoint: string;
+            // A plain URI string, or the DIDComm object form carrying routing keys
+            // (DIDCommMessaging services behind a mediator).
+            serviceEndpoint: string | { uri: string; accept?: string[]; routingKeys?: string[] };
         }>,
     },
     didDocumentMetadata?: DocumentMetadata,

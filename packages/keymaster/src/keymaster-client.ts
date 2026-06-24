@@ -10,6 +10,7 @@ import {
     ResolvedAddressInfo,
     CheckWalletResult,
     CreateAssetOptions,
+    DidCommUnpackResult,
     DmailItem,
     DmailMessage,
     FileAssetOptions,
@@ -539,6 +540,84 @@ export default class KeymasterClient implements KeymasterInterface {
         try {
             const response = await this.axios.delete(`${this.API}/addresses/publish`, { data: { name } });
             return response.data.ok;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async publishDidComm(endpoint?: string, name?: string, routingKeys?: string[]): Promise<boolean> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/publish`, { endpoint, name, routingKeys });
+            return response.data.ok;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async unpublishDidComm(name?: string): Promise<boolean> {
+        try {
+            const response = await this.axios.delete(`${this.API}/didcomm/publish`, { data: { name } });
+            return response.data.ok;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async packDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options?: { sign?: boolean; anoncrypt?: boolean; encryption?: 'A256CBC-HS512' | 'XC20P' | 'A256GCM'; name?: string }
+    ): Promise<string> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/pack`, { message, to, options });
+            return response.data.packed;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async unpackDidComm(packed: string, options?: { name?: string }): Promise<DidCommUnpackResult> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/unpack`, { packed, options });
+            return response.data.result;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async sendDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options?: { sign?: boolean; anoncrypt?: boolean; encryption?: 'A256CBC-HS512' | 'XC20P' | 'A256GCM'; name?: string }
+    ): Promise<string[]> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/send`, { message, to, options });
+            return response.data.ids;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async receiveDidComm(options?: { name?: string; endpoint?: string }): Promise<DidCommUnpackResult[]> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/receive`, { options });
+            return response.data.results;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async mediateDidComm(options?: { name?: string; endpoint?: string }): Promise<{ relayed: number; skipped: number }> {
+        try {
+            const response = await this.axios.post(`${this.API}/didcomm/mediate`, { options });
+            return response.data.result;
         }
         catch (error) {
             throwError(error);

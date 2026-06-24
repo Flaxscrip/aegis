@@ -26,6 +26,7 @@ const Endpoints = {
     keys_decrypt_json: '/api/v1/keys/decrypt/json',
     aliases: '/api/v1/aliases',
     addresses: '/api/v1/addresses',
+    didcomm: '/api/v1/didcomm',
     nostr: '/api/v1/nostr',
     nostr_import: '/api/v1/nostr/import',
     nostr_nsec: '/api/v1/nostr/nsec',
@@ -1361,6 +1362,214 @@ describe('unpublishAddress', () => {
 
         try {
             await keymaster.unpublishAddress();
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('publishDidComm', () => {
+    const mockEndpoint = 'https://relay.example/didcomm';
+
+    it('should publish didcomm key agreement', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/publish`, (body: any) => body.endpoint === mockEndpoint)
+            .reply(200, { ok: true });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const ok = await keymaster.publishDidComm(mockEndpoint);
+
+        expect(ok).toStrictEqual(true);
+    });
+
+    it('should throw exception on publishDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/publish`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.publishDidComm(mockEndpoint);
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('unpublishDidComm', () => {
+    it('should unpublish didcomm key agreement', async () => {
+        nock(KeymasterURL)
+            .delete(`${Endpoints.didcomm}/publish`)
+            .reply(200, { ok: true });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const ok = await keymaster.unpublishDidComm();
+
+        expect(ok).toStrictEqual(true);
+    });
+
+    it('should throw exception on unpublishDidComm server error', async () => {
+        nock(KeymasterURL)
+            .delete(`${Endpoints.didcomm}/publish`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.unpublishDidComm();
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('packDidComm', () => {
+    it('should pack a didcomm message', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/pack`, (body: any) => body.to === 'did:test:bob')
+            .reply(200, { packed: '{"protected":"x"}' });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const packed = await keymaster.packDidComm({ type: 'https://x/1/msg', body: {} }, 'did:test:bob');
+
+        expect(packed).toStrictEqual('{"protected":"x"}');
+    });
+
+    it('should throw exception on packDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/pack`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.packDidComm({ type: 'https://x/1/msg', body: {} }, 'did:test:bob');
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('unpackDidComm', () => {
+    it('should unpack a didcomm message', async () => {
+        const result = { message: { body: { hi: 1 } }, metadata: { encrypted: true, authenticated: true, nonRepudiation: false } };
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/unpack`)
+            .reply(200, { result });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const out = await keymaster.unpackDidComm('{"protected":"x"}');
+
+        expect(out).toStrictEqual(result);
+    });
+
+    it('should throw exception on unpackDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/unpack`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.unpackDidComm('{"protected":"x"}');
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('sendDidComm', () => {
+    it('should send a didcomm message and return ids', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/send`, (body: any) => body.to === 'did:test:bob')
+            .reply(200, { ids: ['id-1'] });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const ids = await keymaster.sendDidComm({ type: 'https://x/1/msg', body: {} }, 'did:test:bob');
+
+        expect(ids).toStrictEqual(['id-1']);
+    });
+
+    it('should throw exception on sendDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/send`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.sendDidComm({ type: 'https://x/1/msg', body: {} }, 'did:test:bob');
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('receiveDidComm', () => {
+    it('should receive and return unpacked messages', async () => {
+        const results = [{ message: { body: { hi: 1 } }, metadata: { encrypted: true, authenticated: true, nonRepudiation: false } }];
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/receive`)
+            .reply(200, { results });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const out = await keymaster.receiveDidComm();
+
+        expect(out).toStrictEqual(results);
+    });
+
+    it('should throw exception on receiveDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/receive`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.receiveDidComm();
+            throw new ExpectedExceptionError();
+        }
+        catch (error: any) {
+            expect(error.message).toBe(ServerError.message);
+        }
+    });
+});
+
+describe('mediateDidComm', () => {
+    it('should run the mediator relay and return counts', async () => {
+        const result = { relayed: 2, skipped: 0 };
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/mediate`)
+            .reply(200, { result });
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+        const out = await keymaster.mediateDidComm();
+
+        expect(out).toStrictEqual(result);
+    });
+
+    it('should throw exception on mediateDidComm server error', async () => {
+        nock(KeymasterURL)
+            .post(`${Endpoints.didcomm}/mediate`)
+            .reply(500, ServerError);
+
+        const keymaster = await KeymasterClient.create({ url: KeymasterURL });
+
+        try {
+            await keymaster.mediateDidComm();
             throw new ExpectedExceptionError();
         }
         catch (error: any) {

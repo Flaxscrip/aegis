@@ -8,6 +8,13 @@ const config = {
     gatekeeperURL: process.env.ARCHON_GATEKEEPER_URL || 'http://localhost:4224',
     heraldURL: process.env.ARCHON_HERALD_URL || 'http://localhost:4230',
     lightningMediatorURL: process.env.ARCHON_LIGHTNING_MEDIATOR_URL || 'http://localhost:4235',
+    didcommURL: process.env.ARCHON_DIDCOMM_URL || 'http://localhost:4236',
+    // Public base URL this node is reachable at (clearnet host or Tor onion).
+    // Used to advertise the DIDComm relay endpoint (`<publicHost>/didcomm`).
+    publicHost: process.env.ARCHON_DRAWBRIDGE_PUBLIC_HOST || '',
+    // When publicHost is unset, the DIDComm endpoint falls back to the Tor onion
+    // fronting this Drawbridge, read from this shared hidden-service hostname file.
+    torHostnameFile: process.env.ARCHON_DRAWBRIDGE_TOR_HOSTNAME_FILE || '/data/tor/hostname',
     adminApiKey: process.env.ARCHON_ADMIN_API_KEY || '',
 
     // L402

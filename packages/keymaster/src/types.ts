@@ -359,6 +359,17 @@ export interface NoticeMessage {
     dids: string[];
 }
 
+export interface DidCommUnpackResult {
+    message: any;
+    metadata: {
+        encrypted: boolean;
+        authenticated: boolean;
+        nonRepudiation: boolean;
+        sender?: string;
+        signer?: string;
+    };
+}
+
 export interface KeymasterInterface {
     // Wallet
     loadWallet(): Promise<WalletFile>;
@@ -398,6 +409,23 @@ export interface KeymasterInterface {
     removeAddress(address: string): Promise<boolean>;
     publishAddress(address?: string, name?: string): Promise<boolean>;
     unpublishAddress(name?: string): Promise<boolean>;
+
+    // DIDComm
+    publishDidComm(endpoint?: string, name?: string, routingKeys?: string[]): Promise<boolean>;
+    unpublishDidComm(name?: string): Promise<boolean>;
+    packDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options?: { sign?: boolean; anoncrypt?: boolean; encryption?: 'A256CBC-HS512' | 'XC20P' | 'A256GCM'; name?: string }
+    ): Promise<string>;
+    unpackDidComm(packed: string, options?: { name?: string }): Promise<DidCommUnpackResult>;
+    sendDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options?: { sign?: boolean; anoncrypt?: boolean; encryption?: 'A256CBC-HS512' | 'XC20P' | 'A256GCM'; name?: string }
+    ): Promise<string[]>;
+    receiveDidComm(options?: { name?: string; endpoint?: string }): Promise<DidCommUnpackResult[]>;
+    mediateDidComm(options?: { name?: string; endpoint?: string }): Promise<{ relayed: number; skipped: number }>;
 
     // Nostr
     addNostr(id?: string): Promise<NostrKeys>;

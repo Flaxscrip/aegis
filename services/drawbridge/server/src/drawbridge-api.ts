@@ -64,6 +64,33 @@ readFile(new URL('../package.json', import.meta.url), 'utf-8').then(data => {
     drawbridgeVersionInfo.set({ version: 'unknown', commit: serviceCommit }, 1);
 });
 
+// Public DIDComm relay endpoint advertised by publishDidComm: an explicit
+// public host, else the Tor onion that fronts this Drawbridge (the same hidden
+// service used for the Lightning endpoint). Cached on first success; returns
+// null until resolvable (the onion hostname file may not exist yet).
+let cachedDidCommEndpoint: string | undefined;
+
+async function resolveDidCommEndpoint(): Promise<string | null> {
+    if (cachedDidCommEndpoint) {
+        return cachedDidCommEndpoint;
+    }
+    if (config.publicHost) {
+        cachedDidCommEndpoint = `${config.publicHost.replace(/\/+$/, '')}/didcomm`;
+        return cachedDidCommEndpoint;
+    }
+    try {
+        const onion = (await readFile(config.torHostnameFile, 'utf-8')).trim();
+        if (onion) {
+            cachedDidCommEndpoint = `http://${onion}:${config.port}/didcomm`;
+            return cachedDidCommEndpoint;
+        }
+    }
+    catch {
+        // Tor hostname not published yet — retry on a later request.
+    }
+    return null;
+}
+
 function normalizePath(path: string): string {
     return path
         .replace(/\/did\/(?:did:[^/]+|did%3[aA][^/]+)/, '/did/:did')
@@ -137,6 +164,48 @@ function buildProxyBody(req: express.Request): BodyInit | undefined {
     }
 
     return undefined;
+}
+
+// Generic reverse proxy to an internal service, stripping a path prefix.
+async function proxyRequest(req: express.Request, res: express.Response, baseURL: string, prefixToStrip: string) {
+    const upstreamPath = prefixToStrip
+        ? (req.originalUrl.replace(new RegExp(`^${prefixToStrip}`), '') || '/')
+        : req.originalUrl;
+    const upstreamUrl = new URL(upstreamPath, baseURL);
+
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+        if (!value || name === 'host' || name === 'content-length') {
+            continue;
+        }
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                headers.append(name, item);
+            }
+        }
+        else {
+            headers.set(name, value);
+        }
+    }
+
+    const body = buildProxyBody(req);
+
+    const upstream = await fetch(upstreamUrl, {
+        method: req.method,
+        headers,
+        body,
+        redirect: 'manual',
+    });
+
+    res.status(upstream.status);
+    upstream.headers.forEach((value, key) => {
+        if (key === 'content-length' || key === 'transfer-encoding' || key === 'connection') {
+            return;
+        }
+        res.setHeader(key, value);
+    });
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.send(buffer);
 }
 
 async function proxyHeraldRequest(req: express.Request, res: express.Response, prefixToStrip = '/names') {
@@ -263,6 +332,8 @@ async function main() {
 
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: false, limit: '10mb' }));
+    // Capture DIDComm encrypted envelopes as text so they survive proxying to the relay.
+    app.use(express.text({ type: 'application/didcomm-encrypted+json', limit: '10mb' }));
     app.use(express.text({ limit: '10mb' }));
     // Skip body buffering for streaming routes — they read req directly
     const rawParser = express.raw({ type: 'application/octet-stream', limit: '10mb' });
@@ -353,6 +424,13 @@ async function main() {
 
     v1router.get('/version', (_req, res) => {
         res.json({ version: serviceVersion, commit: serviceCommit });
+    });
+
+    // Public DIDComm relay endpoint, so `publishDidComm` can auto-discover it
+    // (the way publishLightning learns its public host): an explicit public host,
+    // else the Tor onion fronting this Drawbridge. Null when neither is available.
+    v1router.get('/didcomm-endpoint', async (_req, res) => {
+        res.json({ endpoint: await resolveDidCommEndpoint() });
     });
 
     v1router.get('/status', async (_req, res) => {
@@ -635,6 +713,17 @@ async function main() {
         } catch (error: any) {
             logger.error({ err: error, path: req.originalUrl }, 'Herald proxy error');
             res.status(502).json({ error: 'Upstream herald error' });
+        }
+    });
+
+    // Public face for the DIDComm relay (mailbox). The published
+    // DIDCommMessaging endpoint is `<drawbridge public host>/didcomm`.
+    app.use('/didcomm', async (req, res) => {
+        try {
+            await proxyRequest(req, res, config.didcommURL, '/didcomm');
+        } catch (error: any) {
+            logger.error({ err: error, path: req.originalUrl }, 'DIDComm proxy error');
+            res.status(502).json({ error: 'Upstream didcomm error' });
         }
     });
 

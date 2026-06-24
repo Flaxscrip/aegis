@@ -40,6 +40,7 @@ import {
     GroupData,
     Vault,
     VaultOptions,
+    DidCommUnpackResult,
     IDInfo,
     ImageAsset,
     ImageFileAsset,
@@ -78,7 +79,21 @@ import {
     EcdsaJwkPair,
     EcdsaJwkPrivate,
     EcdsaJwkPublic,
+    OkpJwkPair,
+    OkpJwkPublic,
 } from '@didcid/cipher/types';
+import {
+    packDidCommMessage,
+    unpackEncrypted,
+    verifyJws,
+    getEnvelopeInfo,
+    didKeyToX25519,
+    normalizeX25519PublicKey,
+    wrapForward,
+    parseForward,
+    type PackOptions,
+    type DidCommEnc,
+} from '@didcid/cipher/didcomm';
 import { isValidDID } from '@didcid/ipfs/utils';
 import { decryptWithPassphrase, encryptWithPassphrase } from '@didcid/cipher/passphrase';
 
@@ -744,6 +759,9 @@ export default class Keymaster implements KeymasterInterface {
         const publicKeyJwk = verificationMethods[0].publicKeyJwk;
         if (!publicKeyJwk) {
             throw new KeymasterError('The publicKeyJwk is missing in the first verification method.');
+        }
+        if (publicKeyJwk.kty !== 'EC') {
+            throw new KeymasterError('The first verification method is not a secp256k1 key.');
         }
         return publicKeyJwk;
     }
@@ -2271,6 +2289,490 @@ export default class Keymaster implements KeymasterInterface {
         }
 
         return this.updateDID(did, { didDocument, didDocumentData });
+    }
+
+    // DIDComm key agreement keys are derived on a dedicated branch (change=1)
+    // so they never collide with the authentication/signing keys at change=0.
+    // The key is deterministic from the wallet seed and the identity's account,
+    // so it survives backup/recovery without storing extra material.
+    async fetchDidCommKeyPair(name?: string): Promise<OkpJwkPair> {
+        const wallet = await this.loadWallet();
+        const id = await this.fetchIdInfo(name, wallet);
+        const hdkey = await this.getHDKeyFromCacheOrMnemonic(wallet);
+        const path = `m/44'/0'/${id.account}'/1/0`;
+        const didkey = hdkey.derive(path);
+        return this.cipher.generateX25519Jwk(didkey.privateKey!);
+    }
+
+    async publishDidComm(endpoint?: string, name?: string, routingKeys?: string[]): Promise<boolean> {
+        // When no endpoint is given, auto-discover the node's public DIDComm
+        // relay endpoint from the gateway (as publishLightning learns its public
+        // host). A plain Gatekeeper returns nothing, so we publish the
+        // key-agreement key only — pass an explicit endpoint to override.
+        if (!endpoint) {
+            const gateway = this.gatekeeper as Partial<DrawbridgeInterface>;
+            if (typeof gateway.getDidCommEndpoint === 'function') {
+                endpoint = (await gateway.getDidCommEndpoint()) || undefined;
+            }
+        }
+        const id = await this.fetchIdInfo(name);
+        const did = id.did;
+        const keypair = await this.fetchDidCommKeyPair(name);
+        const doc = await this.resolveDID(did);
+        const didDocument = { ...doc.didDocument! };
+
+        const vmId = `${did}#key-agreement-1`;
+        const verificationMethod = (didDocument.verificationMethod || []).filter(vm => vm.id !== vmId);
+        verificationMethod.push({
+            id: vmId,
+            controller: did,
+            type: 'JsonWebKey2020',
+            publicKeyJwk: keypair.publicJwk,
+        });
+        didDocument.verificationMethod = verificationMethod;
+        didDocument.keyAgreement = [vmId];
+
+        const serviceId = `${did}#didcomm`;
+        const services = (didDocument.service || []).filter(s => s.id !== serviceId);
+
+        if (endpoint) {
+            // When routing keys are present, advertise the DIDComm object form so
+            // senders wrap in a Forward to the mediator.
+            const serviceEndpoint = routingKeys && routingKeys.length > 0
+                ? { uri: endpoint, accept: ['didcomm/v2'], routingKeys }
+                : endpoint;
+            services.push({
+                id: serviceId,
+                type: 'DIDCommMessaging',
+                serviceEndpoint,
+            });
+        }
+
+        if (services.length > 0) {
+            didDocument.service = services;
+        }
+        else {
+            delete didDocument.service;
+        }
+
+        return this.updateDID(did, { didDocument });
+    }
+
+    async unpublishDidComm(name?: string): Promise<boolean> {
+        const id = await this.fetchIdInfo(name);
+        const did = id.did;
+        const doc = await this.resolveDID(did);
+        const didDocument = { ...doc.didDocument! };
+
+        const vmId = `${did}#key-agreement-1`;
+        const serviceId = `${did}#didcomm`;
+
+        const verificationMethod = (didDocument.verificationMethod || []).filter(vm => vm.id !== vmId);
+        if (verificationMethod.length > 0) {
+            didDocument.verificationMethod = verificationMethod;
+        }
+        else {
+            delete didDocument.verificationMethod;
+        }
+
+        delete didDocument.keyAgreement;
+
+        const services = (didDocument.service || []).filter(s => s.id !== serviceId);
+        if (services.length > 0) {
+            didDocument.service = services;
+        }
+        else {
+            delete didDocument.service;
+        }
+
+        return this.updateDID(did, { didDocument });
+    }
+
+    private didCommFragment(id: string): string {
+        return id.includes('#') ? id.split('#').pop()! : id;
+    }
+
+    private findVerificationMethod(doc: DidCidDocument, kid: string) {
+        const frag = this.didCommFragment(kid);
+        return (doc.didDocument?.verificationMethod || []).find(vm => vm.id && this.didCommFragment(vm.id) === frag);
+    }
+
+    private resolveKeyAgreement(doc: DidCidDocument): { kid: string; publicJwk: OkpJwkPublic } {
+        const refs = doc.didDocument?.keyAgreement || [];
+        if (refs.length === 0) {
+            throw new KeymasterError('DID has no published keyAgreement key; call publishDidComm first');
+        }
+        const kid = refs[0];
+        const vm = this.findVerificationMethod(doc, kid);
+        if (!vm) {
+            throw new KeymasterError('keyAgreement verification method not found');
+        }
+        try {
+            return { kid, publicJwk: normalizeX25519PublicKey(vm) };
+        }
+        catch {
+            throw new KeymasterError('keyAgreement verification method is not an X25519 key');
+        }
+    }
+
+    // Resolve a DID for DIDComm, supporting foreign methods so Archon agents
+    // interoperate with non-Archon agents. did:key is resolved locally
+    // (deterministic); everything else goes through the gatekeeper, which has a
+    // universal-resolver fallback for did:web and other methods.
+    private async resolveDidForDidComm(did: string): Promise<DidCidDocument> {
+        if (did.startsWith('did:key:')) {
+            const { kid, publicJwk } = didKeyToX25519(did);
+            return {
+                didDocument: {
+                    id: did,
+                    keyAgreement: [kid],
+                    verificationMethod: [{ id: kid, controller: did, type: 'JsonWebKey2020', publicKeyJwk: publicJwk }],
+                },
+            };
+        }
+        return this.resolveDID(did);
+    }
+
+    async packDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options: { sign?: boolean; anoncrypt?: boolean; encryption?: DidCommEnc; name?: string } = {}
+    ): Promise<string> {
+        const { sign = false, anoncrypt = false, encryption, name } = options;
+        const recipientDids = Array.isArray(to) ? to : [to];
+        if (recipientDids.length === 0) {
+            throw new KeymasterError('At least one recipient is required');
+        }
+
+        const recipients = [];
+        for (const recipientDid of recipientDids) {
+            const recipientDoc = await this.resolveDidForDidComm(recipientDid);
+            recipients.push(this.resolveKeyAgreement(recipientDoc));
+        }
+
+        const id = await this.fetchIdInfo(name);
+        const did = id.did;
+
+        // Spread the caller's message first, then force the protocol-controlled
+        // headers so a caller can't override `typ`/`to` (or smuggle a `from` into
+        // an anoncrypt envelope). `from` is set below only for authcrypt.
+        const envelope: Record<string, unknown> = {
+            ...message,
+            id: (message.id as string) || this.cipher.generateRandomSalt(),
+            typ: 'application/didcomm-plain+json',
+            to: recipientDids,
+        };
+        delete envelope.from;
+
+        const packOptions: PackOptions = {};
+
+        if (!anoncrypt) {
+            envelope.from = did;
+            const ownDoc = await this.resolveDID(did);
+            const ownKa = this.resolveKeyAgreement(ownDoc);
+            const ka = await this.fetchDidCommKeyPair(name);
+            packOptions.sender = { kid: ownKa.kid, privateJwk: ka.privateJwk };
+        }
+
+        if (sign) {
+            const keypair = await this.fetchKeyPair(name);
+            if (!keypair) {
+                throw new KeymasterError('Unable to resolve signing key');
+            }
+            const ownDoc = await this.resolveDID(did);
+            const sigVm = ownDoc.didDocument?.verificationMethod?.[0];
+            if (!sigVm?.id) {
+                throw new KeymasterError('DID document has no signing verification method');
+            }
+            const signerKid = sigVm.id.startsWith('#') ? `${did}${sigVm.id}` : sigVm.id;
+            packOptions.signer = { kid: signerKid, privateJwk: keypair.privateJwk };
+        }
+
+        if (encryption) {
+            packOptions.enc = encryption;
+        }
+
+        return packDidCommMessage(envelope, recipients, packOptions);
+    }
+
+    async unpackDidComm(
+        packed: string,
+        options: { name?: string } = {}
+    ): Promise<DidCommUnpackResult> {
+        const { name } = options;
+        const info = getEnvelopeInfo(packed);
+        if (info.type !== 'encrypted') {
+            throw new KeymasterError('Not a DIDComm encrypted message');
+        }
+
+        const id = await this.fetchIdInfo(name);
+        const ownDoc = await this.resolveDID(id.did);
+        const ownKa = this.resolveKeyAgreement(ownDoc);
+
+        if (!info.kids?.includes(ownKa.kid)) {
+            throw new KeymasterError('Message is not addressed to this identity');
+        }
+
+        let senderKey: OkpJwkPublic | undefined;
+        if (info.skid) {
+            const senderDoc = await this.resolveDidForDidComm(info.skid.split('#')[0]);
+            const senderVm = this.findVerificationMethod(senderDoc, info.skid);
+            if (!senderVm) {
+                throw new KeymasterError('Sender keyAgreement key not found');
+            }
+            try {
+                senderKey = normalizeX25519PublicKey(senderVm);
+            }
+            catch {
+                throw new KeymasterError('Sender keyAgreement key is not X25519');
+            }
+        }
+
+        const ka = await this.fetchDidCommKeyPair(name);
+        const { plaintext } = unpackEncrypted(packed, { kid: ownKa.kid, privateJwk: ka.privateJwk }, senderKey);
+        const text = new TextDecoder().decode(plaintext);
+        const inner = JSON.parse(text);
+
+        const metadata = {
+            encrypted: true,
+            authenticated: info.alg === 'ECDH-1PU+A256KW',
+            nonRepudiation: false,
+            sender: info.skid,
+            signer: undefined as string | undefined,
+        };
+
+        if (inner && inner.signatures) {
+            const jwsKid = inner.signatures[0]?.header?.kid;
+            if (!jwsKid) {
+                throw new KeymasterError('Signed message missing signer key id');
+            }
+            const signerDoc = await this.resolveDID(jwsKid.split('#')[0]);
+            const signerVm = this.findVerificationMethod(signerDoc, jwsKid);
+            if (!signerVm?.publicKeyJwk || signerVm.publicKeyJwk.kty !== 'EC') {
+                throw new KeymasterError('Signer key not found or not secp256k1');
+            }
+            const { payload } = verifyJws(text, signerVm.publicKeyJwk);
+            metadata.nonRepudiation = true;
+            metadata.signer = jwsKid;
+            return { message: JSON.parse(new TextDecoder().decode(payload)), metadata };
+        }
+
+        return { message: inner, metadata };
+    }
+
+    private async resolveDidCommEndpoint(did: string): Promise<{ uri: string; routingKeys: string[] } | undefined> {
+        const doc = await this.resolveDidForDidComm(did);
+        const service = (doc.didDocument?.service || []).find(s => s.type === 'DIDCommMessaging');
+        if (!service) {
+            return undefined;
+        }
+        const endpoint = service.serviceEndpoint as unknown;
+        if (typeof endpoint === 'string') {
+            return { uri: endpoint, routingKeys: [] };
+        }
+        // DIDComm object form: { uri, accept, routingKeys }
+        if (endpoint && typeof (endpoint as any).uri === 'string') {
+            return { uri: (endpoint as any).uri, routingKeys: (endpoint as any).routingKeys || [] };
+        }
+        return undefined;
+    }
+
+    private async resolveX25519Key(kid: string): Promise<OkpJwkPublic> {
+        const doc = await this.resolveDidForDidComm(kid.split('#')[0]);
+        const vm = this.findVerificationMethod(doc, kid);
+        if (!vm) {
+            throw new KeymasterError(`key ${kid} not found`);
+        }
+        try {
+            return normalizeX25519PublicKey(vm);
+        }
+        catch {
+            throw new KeymasterError(`key ${kid} is not an X25519 key`);
+        }
+    }
+
+    // A routing key (from a recipient's DIDCommMessaging service or a
+    // coordinate-mediation grant) may be a full key id (`did#frag`) or a bare
+    // DID (the `routing_did` grant form, whose key-agreement key is used).
+    private async resolveRoutingKey(routingKey: string): Promise<{ kid: string; publicJwk: OkpJwkPublic }> {
+        if (routingKey.includes('#')) {
+            return { kid: routingKey, publicJwk: await this.resolveX25519Key(routingKey) };
+        }
+        const doc = await this.resolveDidForDidComm(routingKey);
+        return this.resolveKeyAgreement(doc);
+    }
+
+    // Pack a message and deliver it to each recipient's DIDCommMessaging mailbox
+    // endpoint (store-and-forward). Returns the stored message ids per delivery.
+    async sendDidComm(
+        message: Record<string, unknown>,
+        to: string | string[],
+        options: { sign?: boolean; anoncrypt?: boolean; encryption?: DidCommEnc; name?: string } = {}
+    ): Promise<string[]> {
+        const recipientDids = Array.isArray(to) ? to : [to];
+        const packed = await this.packDidComm(message, recipientDids, options);
+
+        const ids: string[] = [];
+        for (const recipientDid of recipientDids) {
+            const endpoint = await this.resolveDidCommEndpoint(recipientDid);
+            if (!endpoint) {
+                throw new KeymasterError(`recipient ${recipientDid} has no DIDCommMessaging endpoint`);
+            }
+
+            let envelope = packed;
+            // If the recipient is behind a mediator, wrap the packed message in a
+            // Forward addressed to the mediator's routing key.
+            if (endpoint.routingKeys.length > 0) {
+                const recipientDoc = await this.resolveDidForDidComm(recipientDid);
+                const recipientKa = this.resolveKeyAgreement(recipientDoc);
+                const routing = await this.resolveRoutingKey(endpoint.routingKeys[0]);
+                envelope = wrapForward(packed, recipientKa.kid, { kid: routing.kid, publicJwk: routing.publicJwk });
+            }
+
+            const response = await fetch(`${endpoint.uri.replace(/\/+$/, '')}/api/v1/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/didcomm-encrypted+json' },
+                body: envelope,
+            });
+            if (!response.ok) {
+                throw new KeymasterError(`DIDComm delivery to ${recipientDid} failed: ${response.status}`);
+            }
+            const data = await response.json();
+            ids.push(...(data.ids || []));
+        }
+        return ids;
+    }
+
+    // Fetch queued messages from this identity's own mailbox (proving DID control
+    // with a signed challenge), unpack them, and acknowledge (remove) what unpacked.
+    async receiveDidComm(
+        options: { name?: string; endpoint?: string } = {}
+    ): Promise<DidCommUnpackResult[]> {
+        const { name } = options;
+        const id = await this.fetchIdInfo(name);
+        const resolved = options.endpoint ? { uri: options.endpoint } : await this.resolveDidCommEndpoint(id.did);
+        if (!resolved) {
+            throw new KeymasterError('identity has no DIDCommMessaging endpoint; publishDidComm with an endpoint first');
+        }
+        const base = resolved.uri.replace(/\/+$/, '');
+        const keypair = await this.fetchKeyPair(name);
+        if (!keypair) {
+            throw new KeymasterError('unable to resolve signing key');
+        }
+
+        const sign = async (): Promise<{ challenge: string; signature: string }> => {
+            const challengeResponse = await fetch(`${base}/api/v1/challenge`);
+            const { challenge } = await challengeResponse.json();
+            const signature = this.cipher.signHash(this.cipher.hashMessage(challenge), keypair.privateJwk);
+            return { challenge, signature };
+        };
+
+        const auth = await sign();
+        const fetchResponse = await fetch(`${base}/api/v1/messages/fetch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ did: id.did, ...auth }),
+        });
+        if (!fetchResponse.ok) {
+            throw new KeymasterError(`DIDComm fetch failed: ${fetchResponse.status}`);
+        }
+        const { messages } = await fetchResponse.json();
+
+        const results: DidCommUnpackResult[] = [];
+        const handled: string[] = [];
+        for (const entry of messages || []) {
+            try {
+                results.push(await this.unpackDidComm(entry.message, { name }));
+                handled.push(entry.id);
+            }
+            catch {
+                // Leave messages we can't unpack on the server for inspection/retry.
+            }
+        }
+
+        if (handled.length > 0) {
+            const ackAuth = await sign();
+            await fetch(`${base}/api/v1/messages/remove`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ did: id.did, ...ackAuth, ids: handled }),
+            });
+        }
+
+        return results;
+    }
+
+    // Mediator role: fetch Forward messages addressed to this identity, unpack
+    // each (anoncrypt to our key agreement key), and relay the inner envelope
+    // back to the relay so it is stored for the final recipient (`next`).
+    async mediateDidComm(
+        options: { name?: string; endpoint?: string } = {}
+    ): Promise<{ relayed: number; skipped: number }> {
+        const { name } = options;
+        const id = await this.fetchIdInfo(name);
+        const resolved = options.endpoint ? { uri: options.endpoint } : await this.resolveDidCommEndpoint(id.did);
+        if (!resolved) {
+            throw new KeymasterError('mediator identity has no DIDCommMessaging endpoint');
+        }
+        const base = resolved.uri.replace(/\/+$/, '');
+        const keypair = await this.fetchKeyPair(name);
+        if (!keypair) {
+            throw new KeymasterError('unable to resolve signing key');
+        }
+        const ka = await this.fetchDidCommKeyPair(name);
+        const ownDoc = await this.resolveDID(id.did);
+        const ownKa = this.resolveKeyAgreement(ownDoc);
+
+        const sign = async (): Promise<{ challenge: string; signature: string }> => {
+            const challengeResponse = await fetch(`${base}/api/v1/challenge`);
+            const { challenge } = await challengeResponse.json();
+            return { challenge, signature: this.cipher.signHash(this.cipher.hashMessage(challenge), keypair.privateJwk) };
+        };
+
+        const fetchResponse = await fetch(`${base}/api/v1/messages/fetch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ did: id.did, ...(await sign()) }),
+        });
+        if (!fetchResponse.ok) {
+            throw new KeymasterError(`mediator fetch failed: ${fetchResponse.status}`);
+        }
+        const { messages } = await fetchResponse.json();
+
+        let relayed = 0;
+        let skipped = 0;
+        const handled: string[] = [];
+        for (const entry of messages || []) {
+            try {
+                const { plaintext } = unpackEncrypted(entry.message, { kid: ownKa.kid, privateJwk: ka.privateJwk });
+                const { forwardedMessage } = parseForward(new TextDecoder().decode(plaintext));
+                const post = await fetch(`${base}/api/v1/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/didcomm-encrypted+json' },
+                    body: forwardedMessage,
+                });
+                if (post.ok) {
+                    relayed += 1;
+                    handled.push(entry.id);
+                }
+                else {
+                    skipped += 1;
+                }
+            }
+            catch {
+                skipped += 1;
+            }
+        }
+
+        if (handled.length > 0) {
+            await fetch(`${base}/api/v1/messages/remove`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ did: id.did, ...(await sign()), ids: handled }),
+            });
+        }
+
+        return { relayed, skipped };
     }
 
     async addAlias(
