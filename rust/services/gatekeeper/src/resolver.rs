@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_recursion::async_recursion;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -11,6 +11,62 @@ use crate::{
     chrono_like_now, generate_json_cid, verify_create_operation_impl, verify_update_operation_impl,
     AppState, EventRecord, GatekeeperDb, ResolveOptions,
 };
+
+/// Typed classes for resolution failures that are the DID's own problem (a missing DID or an
+/// invalid operation chain). These are attached to the specific error message via `.context()`
+/// (see `not_found`/`invalid_operation`) so the original diagnostic is preserved while the type
+/// drives HTTP classification on the conformant `/1.0/identifiers` surface.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ResolveError {
+    /// The DID does not exist, or its operation chain does not yield a valid document.
+    NotFound,
+    /// An operation in the chain failed validation (bad proof, previd, or structure).
+    InvalidOperation,
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::NotFound => write!(f, "DID not found"),
+            ResolveError::InvalidOperation => write!(f, "Invalid operation"),
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
+/// A not-found resolution failure carrying a specific diagnostic message on top of the typed error.
+pub(crate) fn not_found(detail: &'static str) -> anyhow::Error {
+    anyhow::Error::from(ResolveError::NotFound).context(detail)
+}
+
+/// An invalid-operation resolution failure carrying a specific diagnostic message.
+pub(crate) fn invalid_operation(detail: &'static str) -> anyhow::Error {
+    anyhow::Error::from(ResolveError::InvalidOperation).context(detail)
+}
+
+/// Classify an error from `resolve_local_doc_async` for the conformant `/1.0/identifiers` surface:
+/// malformed DID syntax -> 400 `invalidDid`; a DID-level resolution/validation failure -> 404
+/// `notFound`; anything else (I/O, storage, crypto, unexpected) -> 500 `internalError`. Returned as
+/// a raw status code to keep this module free of the HTTP layer.
+///
+/// A failure is DID-level if any cause in the chain is a typed `ResolveError`, OR any cause matches
+/// the codebase's "Invalid operation" validation convention (also used by proofs.rs / events.rs) —
+/// this catches validation errors surfaced from the verify stack (e.g. a malformed proof value)
+/// without those layers needing to depend on this module.
+pub(crate) fn classify_conformant_error(did: &str, error: &anyhow::Error) -> (u16, &'static str) {
+    let is_did_level = error.chain().any(|cause| {
+        cause.is::<ResolveError>() || cause.to_string().starts_with("Invalid operation")
+    });
+
+    if !did.starts_with("did:") {
+        (400, "invalidDid")
+    } else if is_did_level {
+        (404, "notFound")
+    } else {
+        (500, "internalError")
+    }
+}
 
 #[derive(Clone, Serialize, Default)]
 pub(crate) struct CheckDidsByType {
@@ -59,23 +115,23 @@ pub(crate) async fn resolve_local_doc_async(
         store.get_events(did)
     };
     if events.is_empty() {
-        anyhow::bail!("DID not found");
+        return Err(not_found("DID not found"));
     }
 
-    let anchor = events.first().context("did has no events")?;
+    let anchor = events.first().ok_or_else(|| not_found("did has no events"))?;
     let anchor_operation = &anchor.operation;
     if anchor_operation.get("type").and_then(Value::as_str) != Some("create") {
-        anyhow::bail!("first operation must be create");
+        return Err(not_found("first operation must be create"));
     }
 
     let registration = anchor_operation
         .get("registration")
         .and_then(Value::as_object)
-        .context("missing registration")?;
+        .ok_or_else(|| not_found("missing registration"))?;
     let did_type = registration
         .get("type")
         .and_then(Value::as_str)
-        .context("missing registration.type")?;
+        .ok_or_else(|| not_found("missing registration.type"))?;
     let created = anchor_operation
         .get("created")
         .and_then(Value::as_str)
@@ -106,7 +162,7 @@ pub(crate) async fn resolve_local_doc_async(
             "id": did,
             "controller": anchor_operation.get("controller").cloned().unwrap_or(Value::Null)
         }),
-        _ => anyhow::bail!("unsupported registration.type"),
+        _ => return Err(not_found("unsupported registration.type")),
     };
 
     let canonical_id = anchor_operation
@@ -151,7 +207,7 @@ pub(crate) async fn resolve_local_doc_async(
 
     let anchor_valid = verify_create_operation_impl(state, anchor_operation).await?;
     if !anchor_valid {
-        anyhow::bail!("Invalid operation: proof");
+        return Err(invalid_operation("Invalid operation: proof"));
     }
 
     for event in events.iter().skip(1) {
@@ -198,10 +254,10 @@ pub(crate) async fn resolve_local_doc_async(
 
         let valid = verify_update_operation_impl(state, operation, &current_doc).await?;
         if !valid {
-            anyhow::bail!("Invalid operation: proof");
+            return Err(invalid_operation("Invalid operation: proof"));
         }
         if operation.get("previd").and_then(Value::as_str) != Some(resolved.version_id.as_str()) {
-            anyhow::bail!("Invalid operation: previd");
+            return Err(invalid_operation("Invalid operation: previd"));
         }
 
         let registry_for_timestamp = resolved
