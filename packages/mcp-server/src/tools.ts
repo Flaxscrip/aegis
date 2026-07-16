@@ -52,9 +52,45 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const CONTENT_RESULT = Symbol('archon.contentResult');
+
+type ContentResult = {
+    [CONTENT_RESULT]: true;
+    content: CallToolResult['content'];
+    structuredContent?: Record<string, unknown>;
+};
+
+// Lets a handler emit MCP content blocks (image, resource) directly instead of the
+// JSON text block ok() builds for every other tool. Metadata is round-tripped through
+// JSON so structuredContent is exactly the payload the text block carries -- keys with
+// undefined values are dropped by both, not one, as in ok().
+function contentResult(content: CallToolResult['content'], metadata: Record<string, unknown>): ContentResult {
+    const json = JSON.stringify(metadata);
+
+    return {
+        [CONTENT_RESULT]: true,
+        content: [...content, { type: 'text', text: json }],
+        structuredContent: JSON.parse(json),
+    };
+}
+
+function isContentResult(value: unknown): value is ContentResult {
+    return isJsonObject(value) && (value as any)[CONTENT_RESULT] === true;
+}
+
 // MCP requires structuredContent to be a JSON object, so array and scalar results
 // are carried by the text block alone rather than in an invented wrapper object.
 function ok(result: unknown): CallToolResult {
+    if (isContentResult(result)) {
+        const response: CallToolResult = { content: result.content };
+
+        if (result.structuredContent !== undefined) {
+            response.structuredContent = result.structuredContent;
+        }
+
+        return response;
+    }
+
     const json = result === undefined ? undefined : JSON.stringify(result);
     const response: CallToolResult = {
         content: [
@@ -250,16 +286,40 @@ export const ARCHON_MCP_TOOL_DEFINITIONS: ArchonToolDefinition[] = [
     tool({ name: 'archon_create_asset_file', cliCommand: 'create-asset-file', description: 'Create a file asset DID from an inline payload.', schema: z.object({ file: InlineDataSchema }).merge(AssetOptionsSchema), mutates: true, handler: (runtime, { file, ...options }) => requireKeymaster(runtime).createFile(bufferFromInlineData(file), compactOptions({ ...options, filename: file.name, contentType: file.mimeType })) }),
     tool({ name: 'archon_get_asset', cliCommand: 'get-asset', description: 'Resolve an asset by local name, alias, or DID.', schema: IdSchema.merge(ResolveOptionsSchema), handler: (runtime, { id, ...options }) => requireKeymaster(runtime).resolveAsset(id, compactOptions(options)) }),
     tool({ name: 'archon_get_asset_json', cliCommand: 'get-asset-json', description: 'Return a JSON asset as an inline object.', schema: IdSchema.merge(ResolveOptionsSchema), handler: (runtime, { id, ...options }) => requireKeymaster(runtime).resolveAsset(id, compactOptions(options)) }),
-    tool({ name: 'archon_get_asset_image', cliCommand: 'get-asset-image', description: 'Return an image asset as an inline base64 payload.', schema: IdSchema, handler: async (runtime, { id }) => {
+    tool({ name: 'archon_get_asset_image', cliCommand: 'get-asset-image', description: 'Return an image asset as an image content block.', schema: IdSchema, handler: async (runtime, { id }) => {
         const image = await requireKeymaster(runtime).getImage(id);
-        return image?.file?.data ? {
-            file: inlineDataFromBuffer(Buffer.from(image.file.data), image.file.filename, image.file.type),
-            image: image.image,
-        } : null;
+
+        if (!image?.file?.data) {
+            return null;
+        }
+
+        const mimeType = image.file.type ?? 'application/octet-stream';
+        return contentResult(
+            [{ type: 'image', data: Buffer.from(image.file.data).toString('base64'), mimeType }],
+            { name: image.file.filename, mimeType, image: image.image }
+        );
     } }),
-    tool({ name: 'archon_get_asset_file', cliCommand: 'get-asset-file', description: 'Return a file asset as an inline base64 payload.', schema: IdSchema, handler: async (runtime, { id }) => {
+    tool({ name: 'archon_get_asset_file', cliCommand: 'get-asset-file', description: 'Return a file asset as an embedded resource content block.', schema: IdSchema, handler: async (runtime, { id }) => {
         const file = await requireKeymaster(runtime).getFile(id);
-        return file?.data ? inlineDataFromBuffer(Buffer.from(file.data), file.filename, file.type) : null;
+
+        if (!file?.data) {
+            return null;
+        }
+
+        const mimeType = file.type ?? 'application/octet-stream';
+        return contentResult(
+            [{
+                type: 'resource',
+                resource: {
+                    // The asset DID is itself a URI, so the resource is named by a real
+                    // identifier rather than an invented scheme.
+                    uri: await requireKeymaster(runtime).lookupDID(id),
+                    mimeType,
+                    blob: Buffer.from(file.data).toString('base64'),
+                },
+            }],
+            { name: file.filename, mimeType }
+        );
     } }),
     tool({ name: 'archon_update_asset_json', cliCommand: 'update-asset-json', description: 'Merge JSON object data into an existing asset.', schema: IdSchema.extend({ data: JsonObjectSchema }), mutates: true, handler: (runtime, { id, data }) => requireKeymaster(runtime).mergeData(id, data) }),
     tool({ name: 'archon_update_asset_image', cliCommand: 'update-asset-image', description: 'Update an image asset from an inline payload.', schema: IdSchema.extend({ file: InlineDataSchema }), mutates: true, handler: (runtime, { id, file }) => requireKeymaster(runtime).updateImage(id, bufferFromInlineData(file), compactOptions({ filename: file.name })) }),
