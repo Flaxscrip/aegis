@@ -17,6 +17,16 @@ export function vaultItemUri(containerDid: string, name: string): string {
     return `${containerDid}#${encodeURIComponent(name)}`;
 }
 
+// Shared by the tools and the resource reader so one failure reads the same everywhere.
+// The message names the CID, as keymaster's own getVaultItem error does: it is the detail
+// that makes the failure diagnosable -- unpinned data, or a gateway that is down -- and it
+// is not a secret, being already in the DID document.
+export function assetDataUnavailable(id: string, cid?: string): Error {
+    const which = cid ? ` (CID: ${cid})` : '';
+
+    return new Error(`Asset data is unavailable for ${id}${which}`);
+}
+
 type RegisterableResourceServer = {
     registerResource?: (
         name: string,
@@ -43,7 +53,7 @@ async function readAsset(runtime: ArchonRuntime, uri: URL): Promise<ReadResource
         // different failures and must not collapse: falling back to JSON here would answer
         // a request for bytes with metadata, reporting an unavailable CID as a success.
         if (!file.data) {
-            throw new Error(`Asset data is unavailable for ${did}`);
+            throw assetDataUnavailable(did, file.cid);
         }
 
         return {
