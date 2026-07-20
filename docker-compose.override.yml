@@ -1,0 +1,21 @@
+# Sandbox isolation profile.
+#
+# None of the core.yml / gatekeeper-ts.yml / keymaster-ts.yml / cli.yml
+# service definitions declare an explicit `networks:` section, so Compose
+# attaches them all to the implicit project "default" network. Overriding
+# that single network here is sufficient to cut off every container in the
+# stack from the internet in one place, without touching each service file.
+#
+# `internal: true` tells Docker not to install a default route / NAT
+# (MASQUERADE) rule out of this bridge network, so containers on it cannot
+# reach anything off-host. Host-published ports (gatekeeper 4224, keymaster
+# 127.0.0.1:4226, ipfs 5001, etc.) are unaffected — those are inbound DNAT
+# rules on the host, independent of the bridge's outbound route — so the
+# CLI, curl, and browser access from the host still work normally.
+#
+# docker-compose.override.yml is loaded automatically by `docker compose`
+# whenever it sits next to docker-compose.yml, so `docker compose up` alone
+# reproduces this profile with no extra flags.
+networks:
+  default:
+    internal: true

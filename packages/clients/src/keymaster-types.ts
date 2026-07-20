@@ -466,6 +466,7 @@ export interface KeymasterInterface {
     decryptMessage(did: string): Promise<string>;
     encryptJSON(json: unknown, receiver: string, options?: EncryptOptions): Promise<string>;
     decryptJSON(did: string): Promise<unknown>;
+    verifyProof<T extends PossiblyProofed>(obj: T): Promise<boolean>;
 
     // Groups
     createGroup(name: string, options?: CreateAssetOptions): Promise<string>;

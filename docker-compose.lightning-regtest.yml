@@ -1,0 +1,113 @@
+# STRETCH GOAL — local regtest Lightning network, fully offline.
+#
+# Standalone compose file, deliberately NOT included by docker-compose.yml —
+# it's an opt-in add-on layered onto the already-isolated Archon sandbox
+# network, not part of the required node profile. Uses the same images
+# Polar itself uses under the hood (polarlightning/bitcoind,
+# polarlightning/lnd) so this is "Polar's stack, hand-assembled" rather
+# than a from-scratch bitcoind/LND wiring — Polar's own Electron GUI isn't
+# usable in this headless environment.
+#
+# regtest is a private, locally-mined chain by design: no seed nodes, no
+# real peers, no wallet ever needs to touch the internet. Combined with the
+# `archon_default` network's `internal: true` (see docker-compose.override.yml),
+# every flag below that disables discovery/announce behavior is defense in
+# depth on top of an isolation guarantee that already holds regardless.
+#
+# Bring up (after the core node is already running, so archon_default exists):
+#   docker compose -f docker-compose.lightning-regtest.yml up -d
+#
+# Drive it the same way as the archon CLI: `docker compose -f
+# docker-compose.lightning-regtest.yml exec bitcoind bitcoin-cli ...` /
+# `exec lnd-alice lncli ...` / `exec lnd-bob lncli ...` — no host ports are
+# published (published ports don't work on an `internal: true` network on
+# Docker Desktop anyway; see SANDBOX-PROFILE.md §3 lesson learned).
+
+networks:
+  default:
+    name: archon_default
+    external: true
+
+services:
+  bitcoind:
+    image: polarlightning/bitcoind:28.0
+    hostname: bitcoind
+    command: >-
+      bitcoind
+      -server=1
+      -regtest=1
+      -rpcuser=polaruser
+      -rpcpassword=polarpass
+      -rpcbind=0.0.0.0
+      -rpcallowip=0.0.0.0/0
+      -rpcport=18443
+      -zmqpubrawblock=tcp://0.0.0.0:28334
+      -zmqpubrawtx=tcp://0.0.0.0:28335
+      -txindex=1
+      -fallbackfee=0.0002
+      -listen=1
+      -dnsseed=0
+      -upnp=0
+      -listenonion=0
+      -discover=0
+      -dns=0
+    volumes:
+      - ./data/regtest-lightning/bitcoind:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: ["CMD-SHELL", "bitcoin-cli -regtest -rpcuser=polaruser -rpcpassword=polarpass getblockchaininfo >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  lnd-alice:
+    image: polarlightning/lnd:0.18.5-beta
+    hostname: alice
+    command: >-
+      lnd
+      --noseedbackup
+      --trickledelay=5000
+      --alias=alice
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=polaruser
+      --bitcoind.rpcpass=polarpass
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --tlsextradomain=alice
+    volumes:
+      - ./data/regtest-lightning/lnd-alice:/home/lnd/.lnd
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+
+  lnd-bob:
+    image: polarlightning/lnd:0.18.5-beta
+    hostname: bob
+    command: >-
+      lnd
+      --noseedbackup
+      --trickledelay=5000
+      --alias=bob
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=polaruser
+      --bitcoind.rpcpass=polarpass
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --tlsextradomain=bob
+    volumes:
+      - ./data/regtest-lightning/lnd-bob:/home/lnd/.lnd
+    depends_on:
+      bitcoind:
+        condition: service_healthy

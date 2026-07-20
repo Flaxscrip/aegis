@@ -36,6 +36,7 @@ import {
     NostrEvent,
     NoticeMessage,
     PollConfig,
+    PossiblyProofed,
     StoredWallet,
     VerifiableCredential,
     ViewBallotResult,
@@ -353,6 +354,16 @@ export default class KeymasterClient implements KeymasterInterface {
         try {
             const response = await this.axios.post(`${this.API}/keys/decrypt/json`, { did });
             return response.data.json;
+        }
+        catch (error) {
+            throwError(error);
+        }
+    }
+
+    async verifyProof<T extends PossiblyProofed>(json: T): Promise<boolean> {
+        try {
+            const response = await this.axios.post(`${this.API}/keys/verify`, { json });
+            return response.data.ok;
         }
         catch (error) {
             throwError(error);

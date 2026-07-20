@@ -1,0 +1,102 @@
+# STRETCH GOAL, part 2 — Archon's own Lightning zap flow (CLN + LNbits +
+# Drawbridge + lightning-mediator), fully offline. Layered on top of
+# docker-compose.yml + docker-compose.override.yml + docker-compose.lightning-regtest.yml
+# (needs the regtest `bitcoind` from the latter as CLN's Bitcoin backend).
+#
+# This overrides ONLY the env vars that need to change from the base
+# docker/compose/lightning.yml / drawbridge.yml definitions — Compose merges
+# `environment:` per-key across files, so everything else (ALIAS, RGB,
+# HIVE_*, MIN_CAPACITY_SAT, etc.) is inherited unchanged.
+#
+# Two changes make this fully offline without weakening any security check:
+#   1. NETWORK=regtest + BITCOIN_RPC* point at the regtest bitcoind already
+#      running for the LND stretch goal (docker-compose.lightning-regtest.yml)
+#      instead of the mainnet-shaped ARCHON_BTC_* defaults.
+#   2. NETWORK_MODE=clearnet instead of the default `tor` — the `tor` mode
+#      binds CLN's P2P port to 127.0.0.1 only and expects a live Tor
+#      hidden-service bootstrap (real internet). `clearnet` binds 0.0.0.0
+#      and starts no Tor process at all, so lnd-alice can dial `cln:9736`
+#      directly over archon_default.
+#
+# A third change works around the vendor image gap described in
+# scripts/sandbox/cln-lightningd-wrapper.sh: LNbits talks to CLN over the
+# raw RPC socket (CoreLightningWallet) instead of the REST API
+# (CLNRestWallet), since this image has no working REST gateway. CLN's
+# actual REST/rune setup (drawbridge-init, ARCHON_LIGHTNING_MEDIATOR_CLN_RUNE)
+# is only used by Drawbridge's L402 paywall feature, which this flow never
+# touches, so it's left as-is (harmless, unused) rather than removed.
+#
+# ARCHON_DRAWBRIDGE_PUBLIC_HOST (set in .env, not here) makes the DID-based
+# zap's recipient-invoice fetch loop back to the internal `drawbridge`
+# container instead of requiring Tor or a real HTTPS domain — see
+# services/mediators/lightning/src/lightning-mediator.ts:509-519. That
+# string never needs to resolve anywhere: it's a same-host match key, not a
+# dialed address.
+#
+# Explicitly bring up only what's needed, bypassing the `lightning`/
+# `drawbridge` COMPOSE_PROFILES gate and skipping tor/herald/herald-client/
+# rtl/rtl-init/drawbridge-client (none of which this flow depends on):
+#
+#   docker compose --env-file .env \
+#     -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.lightning-zap.yml \
+#     up -d cln-mainnet-node drawbridge-init lnbits-init lnbits lightning-mediator drawbridge
+
+services:
+  cln-mainnet-node:
+    environment:
+      - NETWORK=regtest
+      - NETWORK_MODE=clearnet
+      - BITCOIN_RPCHOST=bitcoind
+      - BITCOIN_RPCPORT=18443
+      - BITCOIN_RPCUSER=polaruser
+      - BITCOIN_RPCPASSWORD=polarpass
+    volumes:
+      # Fix a vendor-image bug: the entrypoint always writes config lines
+      # for plugins this image's bundled lightningd doesn't have, crash-
+      # looping to FATAL. See scripts/sandbox/cln-lightningd-wrapper.sh for
+      # details — reproduces on mainnet too, not regtest/sandbox-specific.
+      - ./scripts/sandbox/cln-lightningd-wrapper.sh:/usr/local/bin/lightningd-wrapper.sh:ro
+
+  lnbits:
+    environment:
+      - LNBITS_BACKEND_WALLET_CLASS=CoreLightningWallet
+      # CLN's RPC socket, shared read-only from the same data volume CLN
+      # writes to (already mounted at /data/lightning:ro in the base
+      # lightning.yml). NETWORK=regtest + --lightning-dir nest one more
+      # `regtest/` level, matching lightningd's own on-disk layout.
+      - CORELIGHTNING_RPC=/data/lightning/regtest/regtest/lightning-rpc
+      # scripts/lnbits-entrypoint.sh gates its "wait for CLN REST + require
+      # a rune" branch on whether CLNREST_URL is set at all, not on which
+      # backend class is configured — CoreLightningWallet doesn't use
+      # CLNREST_URL, so clear it to skip that branch entirely instead of
+      # needing a rune we have no way to generate (drawbridge-init/
+      # lnbits-init are skipped above).
+      - CLNREST_URL=
+      # The image bakes a fully-resolved .venv + uv.lock into /app at build
+      # time, but scripts/lnbits-entrypoint.sh's `uv run lnbits ...` still
+      # performs its default project-sync check on every start, which hits
+      # PyPI. UV_OFFLINE forces uv to use only the already-baked venv/cache,
+      # matching the "runtime must not need network" constraint.
+      - UV_OFFLINE=1
+    # Remap off host port 5000: it's claimed by macOS's AirPlay Receiver on
+    # this host, and published ports don't work on an `internal: true`
+    # network under Docker Desktop anyway (§3 of SANDBOX-PROFILE.md) —
+    # everything here is driven via `docker compose exec`, so the actual
+    # host port number is irrelevant, this just needs to not collide.
+    ports: !override
+      - "15000:5000"
+
+  # drawbridge-init / lnbits-init both wait on lightning-cli against a
+  # RPC_SOCKET path hardcoded to /data/lightning/bitcoin/bitcoin/... (the
+  # NETWORK=bitcoin/mainnet layout) regardless of our NETWORK=regtest
+  # override — another vendor-script hardcoding, so they'd time out after
+  # 600s even with lightningd healthy. Their actual output (CLN REST runes)
+  # is only consumed by Drawbridge's L402 paywall feature
+  # (ARCHON_DRAWBRIDGE_L402_ENABLED=false by default, untouched by this
+  # flow) — lnbits itself no longer needs a rune since it now talks to CLN
+  # over the raw RPC socket (CoreLightningWallet, above), not REST. Skip
+  # both rather than patch their path logic for a rune nothing here reads.
+  drawbridge-init:
+    command: ["echo", "skipped for sandbox regtest: CLN REST runes are only used by Drawbridge's L402 feature, which this zap flow does not exercise"]
+  lnbits-init:
+    command: ["echo", "skipped for sandbox regtest: LNbits uses CoreLightningWallet (raw RPC socket) here, not CLNRestWallet, so no rune/cert copy is needed"]
