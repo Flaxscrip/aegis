@@ -1,0 +1,52 @@
+# Ollama, for Hearthold's Warden on-device classifier (HEARTHOLD_CLASSIFIER_MODEL).
+# Standalone compose file — layered onto the existing internal `archon_default`
+# network, same pattern as docker-compose.lightning-regtest.yml /
+# docker-compose.lightning-zap.yml.
+#
+# Why a container instead of pointing at the host's `ollama serve`: this
+# network is `internal: true`, and `host.docker.internal` does not resolve
+# on it (confirmed empirically — same EAI_AGAIN failure as every other
+# blocked-egress attempt in this project), so containers here cannot reach
+# anything running on the host at all, Ollama included. Running Ollama as
+# its own container on the same isolated network sidesteps that rather
+# than trying to punch a host-reachability hole in the isolation.
+#
+# Reuses the host's already-pulled model weights instead of re-downloading:
+# `~/.ollama/models` is bind-mounted read-only (not the whole `~/.ollama` —
+# that directory also holds the host's Ollama registry signing key,
+# `server.json`, logs, and shell history, none of which this container
+# needs or should have). Read-only because this container should only ever
+# *serve* an existing model, never pull a new one (a pull would need real
+# internet, defeating the point) — mounting read-only makes that structural
+# rather than just a matter of nobody happening to run `ollama pull` here.
+#
+# Bring up (after the core node + archon_default already exist):
+#   docker compose -f docker-compose.ollama.yml up -d
+# Verify offline-functional:
+#   docker compose -f docker-compose.ollama.yml exec ollama ollama list
+#   # should show qwen3:8b (or whichever models exist under ~/.ollama/models)
+#   # with no network access needed.
+
+networks:
+  default:
+    name: archon_default
+    external: true
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    hostname: ollama
+    volumes:
+      - ${HOME}/.ollama/models:/root/.ollama/models:ro
+    environment:
+      # Never phone home for telemetry/update checks.
+      - OLLAMA_NOPRUNE=1
+      - DO_NOT_TRACK=1
+    healthcheck:
+      # No wget/curl in this minimal image — use the ollama CLI itself,
+      # which talks to the local server over the same API.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s

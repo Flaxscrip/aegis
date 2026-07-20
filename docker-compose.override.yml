@@ -19,3 +19,21 @@
 networks:
   default:
     internal: true
+
+services:
+  # DIDComm relay: permit delivery to PRIVATE / in-network destinations.
+  #
+  # The relay's POST /deliver SSRF-guards clearnet delivery to https-only + non-private hosts
+  # (services/didcomm/server/src/didcomm-api.ts:151-158). On this offline sandbox the ONLY reachable
+  # recipient endpoint is a private in-network host — agents publish http://drawbridge:4222/didcomm
+  # (there is no public/clearnet address, and ARCHON_DRAWBRIDGE_PUBLIC_HOST is a non-resolving symbolic
+  # host reserved for the Lightning zap loopback, which DIDComm does not share). So the relay must be
+  # allowed to dial that private host, or every submit fails 400 "private/loopback endpoint not allowed".
+  #
+  # This does NOT weaken internet isolation: the network above is still `internal: true`, so the relay
+  # can reach `drawbridge` on-network but nothing off-host (a direct dial to a public IP still
+  # ENETUNREACHes). It only lifts the app-level SSRF guard for in-network delivery — the documented
+  # dev/test pattern (Hearthold docs/manual-testing.md uses ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS=true).
+  didcomm:
+    environment:
+      - ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS=true

@@ -700,21 +700,113 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
   down cln-mainnet-node drawbridge-init lnbits-init lnbits lightning-mediator drawbridge
 ```
 
-## 10. Files changed
+## 11. DIDComm relay (for Hearthold) + containerized Ollama
+
+Two further additions, both consumed by a separate downstream project
+(`~/hearthold` — a multi-agent app built on this node, out of scope for this
+document beyond the node-side changes it needed) rather than by anything in
+this repo's own acceptance suite.
+
+### DIDComm relay, `ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS`
+
+Brought up the same way as every other add-on this session — explicitly
+naming the service to bypass the `didcomm` `COMPOSE_PROFILES` gate:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.lightning-zap.yml \
+  up -d didcomm
+```
+
+`ARCHON_DIDCOMM_URL=http://didcomm:4236` (`.env`) and recreating `drawbridge`
+to pick it up gets `/api/v1/capabilities` → `didcomm: true` and
+`/didcomm/health` → `{"ready":true}`.
+
+**Why this needed a real (if narrowly-scoped) SSRF-guard opt-in, unlike
+Lightning's zap loopback (§9):** DIDComm delivery resolves the *recipient's*
+published endpoint and **genuinely dials it**
+(`services/didcomm/server/src/didcomm-api.ts`, `POST /deliver` →
+`POST <endpoint>/api/v1/messages`) — there is no same-host string-compare
+shortcut here the way `lightning-mediator.ts:509-519` has. Our node
+advertises the symbolic `https://sandbox.archon.local/didcomm` (via
+`ARCHON_DRAWBRIDGE_PUBLIC_HOST`, §9) — fine for Lightning's string
+comparison, but DIDComm actually tries to connect to it and gets nothing (a
+non-resolving host, by design). Pointing an agent at the real in-network
+`http://drawbridge:4222/didcomm` instead then hits a second, independent
+guard: `/deliver` SSRF-blocks clearnet delivery to anything that isn't
+`https:` + non-private (`didcomm-api.ts:151-158`), rejecting `http://` and
+private hosts alike with `400 private/loopback endpoint not allowed`.
+
+Fix — `docker-compose.override.yml`:
+```yaml
+services:
+  didcomm:
+    environment:
+      - ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS=true
+```
+
+This lifts only the **application-level** check (confirmed by reading the
+guard directly, not just trusting the description that arrived with it):
+the code path still does a real `fetch()`, and the network underneath is
+still `internal: true` — a dial to any public IP still hard-fails
+`ENETUNREACH` regardless of this flag. It's the same flag Hearthold's own
+`docs/manual-testing.md` documents for dev/test use, not something invented
+for this sandbox.
+
+**A cleaner option, not implemented this pass:** give the DIDComm relay the
+same self-loopback the Lightning mediator already has — when a recipient's
+endpoint host matches this node's own `getPublicHost()`, write to the local
+mailbox directly instead of dialing out. That would let DIDComm reuse the
+existing `sandbox.archon.local` convention with no private-egress flag and
+no per-consumer endpoint override. Left as a documented upstream
+enhancement rather than done here, since the opt-in flag already satisfies
+the isolation requirement without it.
+
+### Ollama, containerized
+
+A separate stretch need: Hearthold's on-device artefact classifier calls an
+Ollama endpoint. The host already had Ollama running natively with models
+pulled (`qwen3:8b`, the classifier's default) — but `host.docker.internal`
+does not resolve on this `internal: true` network (confirmed empirically,
+same `EAI_AGAIN` pattern as every other blocked-egress attempt in this
+document), so a container here cannot reach anything on the host at all.
+Rather than open a host-reachability hole, `docker-compose.ollama.yml` runs
+Ollama as its own container on `archon_default`:
+
+```bash
+docker compose -f docker-compose.ollama.yml up -d
+```
+
+Reuses the host's already-pulled model weights instead of re-downloading —
+`~/.ollama/models` (not the whole `~/.ollama`, which also holds the host's
+Ollama registry signing key, logs, and shell history) is bind-mounted
+**read-only** into the container. Read-only is deliberate, not incidental:
+this container should only ever *serve* an existing model, never `ollama
+pull` a new one (that would need real internet, defeating the point), so
+making the mount structurally read-only enforces that rather than relying
+on nobody happening to run the wrong command.
+
+Confirmed: `ollama list` inside the container shows all of the host's
+models (including `qwen3:8b`) with no download; `bash -c 'exec 3<>/dev/tcp/1.1.1.1/80'`
+inside the container fails `Network is unreachable` — same isolation
+guarantee as everything else, no exception carved out for this container.
+
+## 12. Files changed
 
 | File | Purpose |
 |------|---------|
-| `.env` (gitignored, not committed) | Sandbox settings per §2; `ARCHON_KEYMASTER_GATEKEEPER_URL`, `ARCHON_DRAWBRIDGE_PUBLIC_HOST`, `ARCHON_CLN_VERSION` per §9 |
-| `docker-compose.override.yml` | Internal-only network, §3 |
+| `.env` (gitignored, not committed) | Sandbox settings per §2; `ARCHON_KEYMASTER_GATEKEEPER_URL`, `ARCHON_DRAWBRIDGE_PUBLIC_HOST`, `ARCHON_CLN_VERSION` per §9; `ARCHON_DIDCOMM_URL` per §11 |
+| `docker-compose.override.yml` | Internal-only network, §3; `didcomm` private-egress opt-in, §11 |
 | `packages/clients/src/keymaster-types.ts` | Add `verifyProof` to `KeymasterInterface` |
 | `packages/clients/src/keymaster-client.ts` | Implement `verifyProof` over `POST /keys/verify` |
 | `docker-compose.lightning-regtest.yml` | Stretch goal: regtest bitcoind + 2x LND, §8 |
 | `docker-compose.lightning-zap.yml` | Stretch goal: CLN + LNbits + Drawbridge zap flow, §9 |
 | `scripts/sandbox/cln-lightningd-wrapper.sh` | Fix vendor CLN image's broken config generation, §9 |
+| `docker-compose.ollama.yml` | Containerized Ollama for Hearthold's classifier, §11 |
 | `data/.gitignore` | Added `regtest-lightning/` |
 | `SANDBOX-PROFILE.md` | This document |
 
 To tear down: `docker compose --env-file .env down` (add `-v` to also drop
 the `data/mongodb` and `data/redis` volumes; DID state, wallets, and IPFS
 blocks all live under `./data/`, which is not touched by `down` alone).
-Tear down the Lightning stretch goals separately per §8/§9.
+Tear down the Lightning stretch goals separately per §8/§9, and the
+DIDComm/Ollama add-ons per §11.
