@@ -105,17 +105,21 @@ Every beat was exercised against the live stack:
 | Beat | Status |
 |------|--------|
 | Act 0 — isolation proof | ✅ `ENETUNREACH` / `EAI_AGAIN`, reliable |
-| Act 1 core — `run-evidence.sh` (graph + selective disclosure + co-sign) | ✅ fully green, self-contained, reliable |
+| Act 1 core — `run-finance.sh` (income-threshold graph + selective disclosure + co-sign) | ✅ fully green, self-contained, reliable (financial-themed) |
 | Act 1 Beat 1 — live Emissary submit + on-device classify | ✅ works **only with a fresh `serve`** (12s, HIGH); stale serve times out (see step 2) |
-| Act 2 Beat 1 — `run-prove.sh setup` (issue + accept credential) | ✅ green (interactive Signet PIN is the live two-terminal half) |
+| Act 2 Beat 1 — `run-prove-finance.sh setup` (issue + accept AccreditedInvestor) | ✅ green (interactive Signet PIN is the live two-terminal half) |
 | Act 2 Beat 2 — DID-to-DID zap | ✅ works after CLN/LNbits recovery (moved 10k sats, balances exact) |
 
-**Open issue (needs a decision — see Honesty notes):** the seeded demo data is
-guild-membership / event-attendance themed (`GuildMembership`, "summer meetups"),
-not financial. The *primitive* is domain-agnostic and the auditor framing holds,
-but for a finance room the concrete examples read as off-topic. Either narrate the
-membership example as illustrative of the primitive (honest, cheap) or seed
-financial-themed observations/credential in Hearthold (a small e2e variant).
+**Financial theming — done (2026-07-21).** The evidence flow is now financial:
+`run-finance.sh` attests *"annual income exceeds the $200,000 accredited-investor
+threshold"* from quarterly income records, with selective disclosure (spot-check
+one quarter) and a Sovereign co-sign — all verified green. The Act 2 credential is
+`AccreditedInvestor` (issued by a "Meridian Capital Compliance" authority) via
+`run-prove-finance.sh`. These live in `~/hearthold` (scripts/`e2e-finance-*.ts`,
+`deploy/sandbox/run-finance.sh`, `run-prove-finance.sh`) and are baked into the
+`hearthold:sandbox` image. **Two follow-ups:** commit them in the Hearthold repo,
+and re-pack the offline bundle (`deploy/offline/pack-offline-bundle.sh`) so it
+captures the rebuilt `hearthold:sandbox` image.
 
 ---
 
@@ -173,26 +177,32 @@ the classification decision was made locally — nothing about this document was
 sent to a cloud AI."
 
 ### Beat 2 — mint an issuer-attested, Merkle-rooted evidence graph
-**Say:** "When a relying party asks for proof, the Warden assembles supporting
-observations into a signed evidence graph — Merkle-rooted, so each fact is a leaf
-under one root."
+**Say:** "When the fund asks for proof, the Warden assembles the customer's income
+records into a signed evidence graph — Merkle-rooted, so each record is a leaf
+under one root — and attests the *derived* fact: income exceeds the threshold."
 
-**Show** (the verified flow — evidence graph + selective disclosure + Signet co-sign):
+**Show** (the financial flow — verified green in the dry-run):
 ```bash
-~/hearthold/deploy/sandbox/run-evidence.sh
+~/hearthold/deploy/sandbox/run-finance.sh
 ```
-This runs three things end-to-end (all green in-container):
-- `evidence` — assemble → mint a **signed** graph → verify (trust class: *witnessed*)
-- `evidence-selective` — **reveal one leaf against the root, hide the rest**
-- `evidence-stepup` — the Sovereign's Signet co-sign, embedded and independently verifiable
+This runs three things end-to-end, all on quarterly income records:
+- `finance-evidence` — attest **"annual income exceeds the $200,000 accredited-investor
+  threshold"** → verify. The verifier learns the fact + that 4 records back it
+  (count + Merkle root), **never the figures**.
+- `finance-selective` — an auditor **spot-checks one quarter against the root**, the
+  other three stay hidden.
+- `finance-stepup` — the income records are MEDIUM-sensitivity, so the disclosure
+  carries the Sovereign's Signet co-sign, embedded and independently verifiable.
 
 ### Beat 3 — the money shot: selective disclosure
-**Say:** "Here's the whole point. The auditor asked one question. They get one
-answer — *income exceeds the threshold* — proven against the Merkle root. Every
-other fact in that graph stays sealed, and they can see it's sealed, not absent."
+**Say:** "Here's the whole point. The fund asked one question — *does income clear
+the threshold?* They get one answer, proven against the Merkle root, plus a
+spot-checkable record. Every actual dollar figure stays sealed, and they can see
+it's sealed, not absent."
 
-**Show:** the `evidence-selective` output — one revealed leaf, the siblings shown
-as hashes only, verification passing against the root.
+**Show:** the `finance-selective` output — one revealed quarterly record, the other
+three shown as hashes only, verification passing against the root; tampering the
+date or salt breaks membership.
 
 **Why (auditor):** "This is what a privacy-preserving audit looks like: certainty
 about the fact in scope, cryptographic proof that the holder isn't hiding a
@@ -229,18 +239,19 @@ public ledger is a surveillance engine; a fully opaque one is unauditable. Aegis
 gives the third option.
 
 ### Beat 1 — the payer holds an issuer-signed authorization credential
-**Say:** "First, a regulator or membership authority issues the payer a credential
-— think 'KYC-verified' or 'authorized to transact'. Issued and verified entirely
-offline."
+**Say:** "First, a compliance authority issues the payer an *AccreditedInvestor*
+credential — issued and verified entirely offline."
 
-**Show** (the prove flow — an issuer issues a membership credential, a verifier
-challenges the holder to prove it, gated by the Signet PIN):
+**Show** (the financial prove flow — a compliance authority issues an
+`AccreditedInvestor` credential, a verifier challenges the holder to prove it,
+gated by the Signet PIN):
 ```bash
-~/hearthold/deploy/sandbox/run-prove.sh setup     # issuer issues the credential
-~/hearthold/deploy/sandbox/run-prove.sh verify    # verifier challenges → Signet PIN → proven
+~/hearthold/deploy/sandbox/run-prove-finance.sh setup     # authority issues AccreditedInvestor
+~/hearthold/deploy/sandbox/run-prove-finance.sh signet 1379   # TERMINAL A — the Signet PIN gate
+~/hearthold/deploy/sandbox/run-prove-finance.sh verify        # TERMINAL B — verifier → Signet prompts A
 ```
 **Why:** "Trust rests on the *issuer's* signature. The verifier confirms the payer
-is authorized without the payer handing over any identity documents — same
+is accredited without the payer handing over any identity documents — same
 selective-disclosure principle as Act 1."
 
 ### Beat 2 — the private, DID-to-DID payment
