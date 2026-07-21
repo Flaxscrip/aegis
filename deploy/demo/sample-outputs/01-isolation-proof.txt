@@ -1,0 +1,28 @@
+================================================================================
+AEGIS — ISOLATION PROOF ("the cord is cut")
+================================================================================
+Every container in the stack runs on a Docker network created internal:true.
+A dial to the open internet hard-fails (ENETUNREACH); DNS resolution fails
+(EAI_AGAIN). This is a physical guarantee, not a policy promise -- nothing in
+the demo (identity, credentials, payments, on-device AI) can reach out.
+
+Captured live from the running stack.
+================================================================================
+
+Outbound TCP to 1.1.1.1:80 from across the stack:
+
+  archon-gatekeeper-1        -> ENETUNREACH   (blocked, as required)
+  archon-keymaster-1         -> ENETUNREACH   (blocked, as required)
+  archon-cln-mainnet-node-1  -> ENETUNREACH   (blocked, as required)
+  hearthold-warden           -> ENETUNREACH   (blocked, as required)
+  hearthold-sovereign        -> ENETUNREACH   (blocked, as required)
+  archon-ollama-1            -> ENETUNREACH   (blocked, as required)
+
+DNS resolution of a public host:
+
+  hearthold-warden           -> EAI_AGAIN   (blocked, as required)
+
+In-network service-to-service traffic is unaffected -- e.g. the node still
+answers its own health/capability checks over the internal network:
+
+  drawbridge /api/v1/capabilities  {"didcomm":true,"lightning":true,"names":true}

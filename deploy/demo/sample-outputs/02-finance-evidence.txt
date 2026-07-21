@@ -1,0 +1,65 @@
+================================================================================
+AEGIS / HEARTHOLD — FINANCIAL EVIDENCE, SELECTIVELY DISCLOSED
+================================================================================
+Prove a compliance fact without disclosing the data behind it. The Warden
+assembles the customer's quarterly income records into a Merkle-rooted, signed
+evidence graph and attests a DERIVED fact -- "annual income exceeds the
+$200,000 accredited-investor threshold." A verifier (a fund / onboarding desk)
+learns the fact and that records back it, but never the figures. Selective
+disclosure lets an auditor spot-check ONE quarter against the signed root while
+the rest stay hidden. Because the income records are sensitive, the disclosure
+carries the Sovereign's second-factor (Signet) co-sign -- embedded and
+independently verifiable, no decryption.
+
+Runs entirely on the air-gapped node (see 01-isolation-proof.txt).
+Command:  ./deploy/sandbox/run-finance.sh
+================================================================================
+
+
+━━ finance-evidence ━━
+   attest 'annual income exceeds the $200,000 threshold' from quarterly records — figures never disclosed
+seeded 4 income transaction records
+minted evidence graph: did:cid:bagaaieraivho3zkw5uqlv…
+
+✓ VERIFIED (issuer = Warden, trust class witnessed)
+  claim:      Annual income exceeds the $200,000 accredited-investor threshold
+  structured: {"type":"income-threshold","threshold":200000,"currency":"USD","period":"2025","result":"exceeds"}
+  evidence:   kind=transaction count=4 root=478e6e19ede4…
+  (the verifier learns the threshold is met + that 4 records back it — never the figures)
+
+✓ Finance A1 evidence graph: assemble → mint → present → verify
+
+━━ finance-selective ━━
+   auditor spot-checks ONE quarter against the signed Merkle root; the rest stay hidden
+  ✓ auditor verifies the evidence graph
+  ✓ the group still commits to all 4 quarterly records
+  ✓ disclosure mode is selective
+  ✓ exactly ONE record is revealed (the other three stay hidden)
+  ✓ the revealed record is the requested 2025-06-30 quarter
+  ✓ the revealed leaf verifies against the signed Merkle root
+  ✓ tampering the date breaks membership
+  ✓ a wrong salt breaks membership
+
+✓ Finance A3 selective disclosure: spot-check one record, prove it, hide the rest
+
+━━ finance-stepup ━━
+   MEDIUM-sensitivity income → the Sovereign's Signet co-sign, embedded + independently verifiable
+
+▸ The Sovereign signs; the Warden verifies
+  ✓ valid signed approval verifies
+
+▸ Negatives are rejected
+  ✓ level-0 proof-of-human → rejected
+  ✓ wrong evidence root → rejected
+  ✓ unsigned statement → rejected
+  ✓ signed by the wrong party → rejected
+
+▸ Mint with the signed approval, then verify + third-party-check the co-sign
+  ✓ verifier verifies the evidence graph
+  ✓ the embedded approval carries the Sovereign’s signature
+  ✓ a third party (the verifier) verifies the Sovereign co-sign — no decryption
+  ✓ tampering with the approved claim breaks the signature
+
+✓ Finance A2 signed approval: Sovereign co-sign is embedded + independently verifiable
+
+✓ financial evidence-graph flow verified in the isolated sandbox

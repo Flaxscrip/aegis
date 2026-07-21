@@ -1,0 +1,29 @@
+================================================================================
+AEGIS — A PRIVATE, AUDITABLE PAYMENT (DID -> DID, offline Lightning)
+================================================================================
+A payment addressed by decentralized identifier and settled over Lightning on
+the air-gapped node -- through the Keymaster wallet subsystem, no internet.
+The counterparties are DIDs (Hearthold issues a fresh pairwise DID per
+counterparty), so there is no stable public identifier tying transactions
+together -- no bank-style surveillance ledger. Yet the payment yields a
+verifiable paymentHash, and (paired with the issuer-signed AccreditedInvestor
+credential) an auditor can confirm it was made by an authorized party without
+seeing who, how much, or to whom.
+
+Runs entirely on the air-gapped node (see 01-isolation-proof.txt).
+================================================================================
+
+  # payer proves authorization out-of-band (AccreditedInvestor credential),
+  # then zaps the payee by DID -- offline, through Keymaster:
+  POST /api/v1/lightning/zap  {did: <payee DID>, amount: 15000, memo: "invoice 7781"}
+
+  payer  (warden-test)   balance before:  65000 sats
+  payee  (emissary-test) balance before:  35000 sats
+
+  -> paymentHash: 82f13ae1c4fb4ddd1aa58e32d6e5b819eb5d5b91a80cd1b6704dc20bbfe4617b
+
+  payer  (warden-test)   balance after:   50000 sats   (-15000)
+  payee  (emissary-test) balance after:   50000 sats   (+15000)
+
+  Exact 15,000-sat transfer, settled with the network cord cut.
+================================================================================
