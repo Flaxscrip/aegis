@@ -786,9 +786,24 @@ making the mount structurally read-only enforces that rather than relying
 on nobody happening to run the wrong command.
 
 Confirmed: `ollama list` inside the container shows all of the host's
-models (including `qwen3:8b`) with no download; `bash -c 'exec 3<>/dev/tcp/1.1.1.1/80'`
+models with no download; `bash -c 'exec 3<>/dev/tcp/1.1.1.1/80'`
 inside the container fails `Network is unreachable` — same isolation
 guarantee as everything else, no exception carved out for this container.
+
+**Model choice matters more than size here — pick a non-thinking model.**
+Docker Desktop on macOS has no Metal/GPU passthrough, so this container runs
+CPU-only. Hearthold's default classifier model `qwen3:8b` took >60s/call
+that way; the obvious "go smaller" reflex (`qwen3.5:2b`) made it *worse* —
+never finished a trivial prompt in 180s — because qwen3/qwen3.5 are hybrid
+*reasoning* models that emit `<think>` tokens, and the reasoning tax, not
+the parameter count, dominated the latency. Switching to `qwen2.5:3b` (the
+non-thinking instruct sibling) dropped the same classify to ~6s raw / ~11–15s
+through Hearthold's fuller prompt, with correct results. The model is
+selected entirely on the Hearthold side (`HEARTHOLD_CLASSIFIER_MODEL`, which
+also drives its RAG answerer) — no node-side change; Ollama just serves
+whatever tag is asked for from the read-only mount. Lesson for anyone tuning
+this: on a CPU-only container, prefer a small *instruct* model over any
+reasoning model regardless of size.
 
 ## 12. Files changed
 
