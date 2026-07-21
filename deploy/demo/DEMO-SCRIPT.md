@@ -176,6 +176,30 @@ either."
 the classification decision was made locally — nothing about this document was
 sent to a cloud AI."
 
+### Beat 1b — the data has a real issuer: a bank's signed balance statement
+**Say:** "The customer's own observations are one source. But the strongest
+financial facts come from a third party. Here a *bank* issues a signed balance
+statement as a verifiable credential — and Hearthold takes it in without the
+custodian ever being able to read the figure."
+
+**Show** (Aegis-side extension — runs against the same isolated node, Hearthold
+repo untouched):
+```bash
+deploy/demo/hearthold-ext/run-balance-vc.sh
+```
+- A distinct **bank** issuer registers a `BankBalanceStatement` schema and issues
+  a **signed** statement ("Meridian Capital Bank … balance $4,820,000 … as of
+  2025-12-31") to the Sovereign.
+- The Warden **write-hosts** it into the Sovereign's *private* KB partition —
+  `unsealAsWarden` **FAILS**: the custodian holds the ciphertext but **cannot
+  read the balance at rest**. Only the Sovereign's own key recalls it.
+- The artefact stays linked to the bank's signature (`trustClass: issued`).
+
+**Why (auditor):** "This is the part that flips the usual privacy-vs-trust
+tradeoff. The sensitive figure lives with the customer, sealed even from their
+own custodian — yet the *fact* carries a regulated institution's signature. Trust
+rests on the bank, not on our word or the customer's self-assertion."
+
 ### Beat 2 — mint an issuer-attested, Merkle-rooted evidence graph
 **Say:** "When the fund asks for proof, the Warden assembles the customer's income
 records into a signed evidence graph — Merkle-rooted, so each record is a leaf
