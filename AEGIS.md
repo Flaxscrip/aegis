@@ -61,4 +61,14 @@ See **[SANDBOX-PROFILE.md](SANDBOX-PROFILE.md)** for the isolation proof, the
 acceptance suite, both Lightning stretch goals, and the DIDComm + Ollama
 add-ons.
 
+## Demo
+
+**[deploy/demo/DEMO-SCRIPT.md](deploy/demo/DEMO-SCRIPT.md)** — a presenter-ready,
+two-act walkthrough: *privacy-forward* (prove a compliance fact without
+disclosing the data behind it) and *privacy-forward payment* (a private payment
+an auditor can still verify was authorized), all with the network cord cut.
+Built for a financial/auditor + SSI audience. The offline bundle
+([deploy/offline/](deploy/offline/README.md)) boots the whole thing on a
+disconnected box.
+
 ---
