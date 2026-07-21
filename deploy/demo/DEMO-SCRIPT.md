@@ -40,25 +40,55 @@ exposure.*
 
 ## Pre-flight (before the room is watching)
 
-Run once, confirm green, leave it up. Full bring-up is in `SANDBOX-PROFILE.md`;
-for a truly air-gapped venue, deploy from the offline bundle first
-(`deploy/offline/README.md`).
+> **Hard lesson from the dry-run: do NOT demo on a stack that's been idle for
+> hours.** A stack left running overnight *drifts* — in the dry-run, the CLN node
+> had died (exit 1), the Warden's `serve` poller had gone stale, and LNbits had
+> fallen back to its null wallet. Every one of those silently breaks a beat.
+> **Bring the stack up fresh the morning of** (ideally from the offline bundle at
+> a venue, `deploy/offline/README.md`), then run this pre-flight and the recovery
+> steps below until all four checks are green. Budget 15 min for it.
 
 ```bash
-# 1. Stack healthy + all capabilities on
+# 1. Core capabilities on
 docker exec archon-cli-1 node -e \
   "require('http').get('http://drawbridge:4222/api/v1/capabilities',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log(b))})"
 # want: {"didcomm":true,"lightning":true,"names":true}
 
-# 2. Warden's mailbox poller is running (Hearthold flows hang without it)
-docker exec hearthold-warden sh -c 'ps aux | grep -q "[s]erve" || echo "START serve first"'
+# 2. RESTART the Warden poller fresh — do not trust "it's already running".
+#    A stale serve accepts the submit, then never replies (submit times out ~62s).
+docker exec hearthold-warden pkill -f "index.js serve" 2>/dev/null; sleep 1
+docker compose -f ~/hearthold/docker-compose.hearthold.yml exec -dT warden \
+  sh -c 'node packages/warden/dist/index.js serve > /tmp/serve.log 2>&1'
+sleep 3; docker exec hearthold-warden sh -c 'ps aux | grep -q "[j]s serve" && echo "serve: fresh" || echo "serve: FAILED"'
 
-# 3. Classifier is warm (first inference cold-loads ~10s; pre-warm so the demo pops)
+# 3. Pre-warm the classifier (first inference cold-loads ~19s — reads as a stall on stage)
 docker compose -f ~/hearthold/docker-compose.hearthold.yml exec -T warden \
-  node packages/warden/dist/index.js classify location "pre-warm" >/dev/null
+  node packages/warden/dist/index.js classify location "pre-warm" >/dev/null && echo "classifier: warm"
 
-# 4. Payer wallet is funded (Act 2)
-#    warden-test should show a positive LN balance (~75000 sats from setup)
+# 4. Lightning actually works — do a real test zap and watch balances move (Act 2).
+#    If it errors, run the CLN/LNbits recovery below BEFORE the room arrives.
+#    (see the zap command in Act 2 Beat 2; payer balance should drop by the amount)
+```
+
+### CLN / LNbits recovery (run if the test zap fails)
+
+Symptom: zap returns `{"error":"[object Object]"}`; mediator log says
+`VoidWallet cannot create invoices`. Cause: CLN died and LNbits fell back to the
+null backend. Fix:
+
+```bash
+cd ~/isolation/archon
+# CLN won't restart if a stale RPC socket is left in the data dir (entrypoint's
+# chown on it fails under set -e -> exit 1). Remove it, then restart:
+docker inspect archon-cln-mainnet-node-1 --format '{{.State.Status}}'   # 'exited'? then:
+rm -f data/cln-mainnet/regtest/regtest/lightning-rpc
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.yml \
+  -f docker-compose.lightning-zap.yml up -d cln-mainnet-node
+# wait for readiness, then force-recreate LNbits so it re-inits CoreLightningWallet
+# (a plain restart/up is a no-op — compose sees no change; --force-recreate is required):
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.yml \
+  -f docker-compose.lightning-zap.yml up -d --force-recreate --no-deps lnbits
+docker logs archon-lnbits-1 2>&1 | grep -i "CoreLightningWallet connected"   # want this line
 ```
 
 **Terminal layout for the live run:** three panes —
@@ -67,6 +97,25 @@ The split makes the trust boundary visible: the auditor pane never runs a comman
 that could see raw data.
 
 Timing: Act 0 ~2 min, Act 1 ~6 min, Act 2 ~6 min. ~15 min + questions.
+
+### Dry-run status (2026-07-21)
+
+Every beat was exercised against the live stack:
+
+| Beat | Status |
+|------|--------|
+| Act 0 — isolation proof | ✅ `ENETUNREACH` / `EAI_AGAIN`, reliable |
+| Act 1 core — `run-evidence.sh` (graph + selective disclosure + co-sign) | ✅ fully green, self-contained, reliable |
+| Act 1 Beat 1 — live Emissary submit + on-device classify | ✅ works **only with a fresh `serve`** (12s, HIGH); stale serve times out (see step 2) |
+| Act 2 Beat 1 — `run-prove.sh setup` (issue + accept credential) | ✅ green (interactive Signet PIN is the live two-terminal half) |
+| Act 2 Beat 2 — DID-to-DID zap | ✅ works after CLN/LNbits recovery (moved 10k sats, balances exact) |
+
+**Open issue (needs a decision — see Honesty notes):** the seeded demo data is
+guild-membership / event-attendance themed (`GuildMembership`, "summer meetups"),
+not financial. The *primitive* is domain-agnostic and the auditor framing holds,
+but for a finance room the concrete examples read as off-topic. Either narrate the
+membership example as illustrative of the primitive (honest, cheap) or seed
+financial-themed observations/credential in Hearthold (a small e2e variant).
 
 ---
 
