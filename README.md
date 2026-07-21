@@ -1,3 +1,9 @@
+> **This is [Aegis](AEGIS.md)** — a fork of Archon carrying a fully
+> egress-isolated, air-gapped sandbox profile. For the Aegis-specific overlay
+> and the offline proof, see **[AEGIS.md](AEGIS.md)** and
+> **[SANDBOX-PROFILE.md](SANDBOX-PROFILE.md)**. The upstream Archon README
+> follows unchanged.
+
 [![unit-test](https://github.com/archetech/archon/actions/workflows/unit-test.yml/badge.svg)](https://github.com/archetech/archon/actions/workflows/unit-test.yml) [![Coverage Status](https://coveralls.io/repos/github/archetech/archon/badge.svg?branch=main)](https://coveralls.io/github/archetech/archon?branch=main)
 
 # Archon
