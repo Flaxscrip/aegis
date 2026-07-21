@@ -1,30 +1,76 @@
 ================================================================================
-AEGIS / HEARTHOLD — FINANCIAL EVIDENCE, SELECTIVELY DISCLOSED
+AEGIS / HEARTHOLD — FINANCIAL EVIDENCE: ISSUER-ATTESTED, SELECTIVELY DISCLOSED
 ================================================================================
-Prove a compliance fact without disclosing the data behind it. The Warden
-assembles the customer's quarterly income records into a Merkle-rooted, signed
-evidence graph and attests a DERIVED fact -- "annual income exceeds the
-$200,000 accredited-investor threshold." A verifier (a fund / onboarding desk)
-learns the fact and that records back it, but never the figures. Selective
-disclosure lets an auditor spot-check ONE quarter against the signed root while
-the rest stay hidden. Because the income records are sensitive, the disclosure
-carries the Sovereign's second-factor (Signet) co-sign -- embedded and
-independently verifiable, no decryption.
+Prove a compliance fact without disclosing the data behind it -- and let the
+data carry a real institution's signature, not the custodian's word.
 
-Runs entirely on the air-gapped node (see 01-isolation-proof.txt).
-Command:  ./deploy/sandbox/run-finance.sh
+Two parts, both on the air-gapped node (see 01-isolation-proof.txt):
+
+  PART A  A 3rd-party BANK issues a signed balance statement (a verifiable
+          credential) into the customer's PRIVATE vault. The custodian holds
+          it but CANNOT read the figure at rest; the owner can; trust in the
+          figure rests on the BANK's signature.
+
+  PART B  The Warden assembles quarterly income records into a Merkle-rooted,
+          signed evidence graph and attests a DERIVED fact -- "annual income
+          exceeds the $200,000 accredited-investor threshold." A verifier
+          learns the fact and that records back it, never the figures.
+          Selective disclosure lets an auditor spot-check ONE quarter against
+          the signed root; the rest stay hidden. A Sovereign (2nd-factor
+          Signet) co-sign is embedded and independently verifiable.
 ================================================================================
 
+
+################################################################################
+# PART A — a 3rd-party bank issues a signed Balance Statement VC into the
+#          Sovereign's private KB partition (trust rests on the issuer)
+#          command:  deploy/demo/hearthold-ext/run-balance-vc.sh
+################################################################################
+
+━━ finance-balance-vc — a bank issues a Balance Statement VC → the Sovereign’s private KB ━━
+   Injected into hearthold-warden at runtime (Hearthold repo untouched); throwaway data root.
+
+▸ The bank (a distinct issuer identity) registers a BankBalanceStatement schema
+  ✓ schema registered with the Keymaster: did:cid:bagaaierac4fuogpuhbkub…
+
+▸ The bank issues a signed balance statement → the Sovereign accepts it
+  ✓ the Sovereign accepts the bank-issued balance statement
+  ✓ the accepted VC is an `issued` leaf from the bank
+
+▸ The Warden write-hosts the balance VC into the Sovereign's private member-key partition
+  ✓ the balance VC is sealed to the Sovereign's partition
+  ✓ it is scoped private, owned by the Sovereign
+
+▸ At rest, the custodian CANNOT read the balance (write-host / read-guest)
+  ✓ unsealAsWarden FAILS -- the Warden write-hosts but cannot read the balance at rest
+
+▸ The Sovereign's partition key recovers the balance fact (read-guest recall)
+  ✓ the partition read recovers the bank's balance statement: “BankBalanceStatement credential from did:cid:bagaaieracqblbwbijjxccmxuvkah4uijov74ii62ifoi24k4vn2lcw3435ta — institution=Meridian Capital Bank, accountRef=****8891, statedBalanceUsd=4820000, currency=USD, asOf=2025-12-31 (issuer-attested)”
+
+▸ It stays linked to the bank’s signed credential -- trust in the figure is the ISSUER’s
+  ✓ the artefact links back to the signed balance statement (credentialDid + bank issuer + trustClass:issued)
+
+✓ Bank balance statement → private KB: a 3rd-party financial institution’s signed balance is
+  private-from-the-custodian knowledge, recallable by the Sovereign, still provable via the bank.
+
+✓ 3rd-party bank Balance Statement VC → private KB partition — verified in the isolated sandbox
+
+
+################################################################################
+# PART B — issuer-attested, Merkle-rooted evidence graph + selective disclosure
+#          + Sovereign co-sign, over quarterly income records
+#          command:  ~/hearthold/deploy/sandbox/run-finance.sh
+################################################################################
 
 ━━ finance-evidence ━━
    attest 'annual income exceeds the $200,000 threshold' from quarterly records — figures never disclosed
 seeded 4 income transaction records
-minted evidence graph: did:cid:bagaaieraivho3zkw5uqlv…
+minted evidence graph: did:cid:bagaaiera3ej7zz4u7f5yi…
 
 ✓ VERIFIED (issuer = Warden, trust class witnessed)
   claim:      Annual income exceeds the $200,000 accredited-investor threshold
   structured: {"type":"income-threshold","threshold":200000,"currency":"USD","period":"2025","result":"exceeds"}
-  evidence:   kind=transaction count=4 root=478e6e19ede4…
+  evidence:   kind=transaction count=4 root=1d9f0138dfec…
   (the verifier learns the threshold is met + that 4 records back it — never the figures)
 
 ✓ Finance A1 evidence graph: assemble → mint → present → verify
