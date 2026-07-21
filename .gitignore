@@ -19,3 +19,6 @@ dids.db-journal
 **/.npmrc
 !/.npmrc
 rust/services/gatekeeper/target/
+
+# Offline demo bundle output (multi-GB docker save + models)
+aegis-offline-bundle/

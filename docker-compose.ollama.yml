@@ -37,7 +37,12 @@ services:
     image: ollama/ollama:latest
     hostname: ollama
     volumes:
-      - ${HOME}/.ollama/models:/root/.ollama/models:ro
+      # Model-weights source. Defaults to the host's own Ollama store; on an
+      # air-gapped target that has no ~/.ollama, point AEGIS_OLLAMA_MODELS at
+      # the offline bundle's unpacked model dir (deploy/offline/load unpacks
+      # exactly qwen2.5:3b + nomic-embed-text there). Still read-only — this
+      # container only ever serves, never pulls (see the file header).
+      - ${AEGIS_OLLAMA_MODELS:-${HOME}/.ollama/models}:/root/.ollama/models:ro
     environment:
       # Never phone home for telemetry/update checks.
       - OLLAMA_NOPRUNE=1

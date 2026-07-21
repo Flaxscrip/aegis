@@ -805,7 +805,47 @@ whatever tag is asked for from the read-only mount. Lesson for anyone tuning
 this: on a CPU-only container, prefer a small *instruct* model over any
 reasoning model regardless of size.
 
-## 12. Files changed
+## 12. Going fully offline — the portable bundle
+
+Everything above proves the stack is isolated *at runtime*, but the images
+are still **built and pulled with internet** (npm, base images, `docker
+pull`, `ollama pull`). For a genuinely air-gapped target — a box with no
+internet *ever*, not just at runtime — that build/pull phase has to be
+eliminated too. `deploy/offline/` does that: a two-machine, pack-then-load
+flow that ships every runtime artifact so the complete Aegis + Hearthold
+demo boots with the cord cut.
+
+- **`pack-offline-bundle.sh`** (on the online prep machine — the one where the
+  demo already runs): `docker save`s the exact image set in
+  `images.list` (15 images: the 6 `archetech/*` Node services, the 4
+  third-party infra images, the 4 Lightning images, and `hearthold:sandbox`)
+  into one gzipped tarball — shared Node base layers dedupe, so 16 GB of raw
+  images collapse to **5.3 GB**. It then packages *only* the two Ollama
+  models the classifier needs (`qwen2.5:3b` + `nomic-embed-text` — their 9
+  content-addressed blobs + manifests, **2.0 GB**, not the host's whole
+  `~/.ollama`), plus the compose overlays and Hearthold's compose/scripts.
+  It never touches the network — if an image or model is missing it stops and
+  says "build/pull it first."
+- **`load-offline-bundle.sh`** (on the air-gapped target): `docker load`s the
+  images (restoring their original tags, so compose finds them and does not
+  rebuild), unpacks the models into a local dir, and prints the bring-up
+  commands. Bring-up is `docker compose up -d --no-build` — the one rule is
+  *never* `--build`, which is the only thing that would reach for npm/a
+  registry off-network. `docker-compose.ollama.yml` now takes an
+  `AEGIS_OLLAMA_MODELS` override so the model mount points at the unpacked
+  bundle dir instead of a `~/.ollama` the target doesn't have.
+
+Verified non-destructively: the bundle's models were unpacked into an
+isolated temp dir and served by a throwaway Ollama container mounting *only*
+that dir (no host `~/.ollama`) — `ollama list` showed exactly the two models
+and a real inference ran (proving the blobs are complete, not just
+manifest-visible). The definitive test — `load` onto a physically
+disconnected box and bring the whole stack up — needs a spare/wiped machine,
+so it's documented in `deploy/offline/README.md` rather than run against the
+live demo. The bundle output (`aegis-offline-bundle/`, ~7.3 GB) is
+gitignored; the tooling and `images.list` are tracked.
+
+## 13. Files changed
 
 | File | Purpose |
 |------|---------|
@@ -816,7 +856,9 @@ reasoning model regardless of size.
 | `docker-compose.lightning-regtest.yml` | Stretch goal: regtest bitcoind + 2x LND, §8 |
 | `docker-compose.lightning-zap.yml` | Stretch goal: CLN + LNbits + Drawbridge zap flow, §9 |
 | `scripts/sandbox/cln-lightningd-wrapper.sh` | Fix vendor CLN image's broken config generation, §9 |
-| `docker-compose.ollama.yml` | Containerized Ollama for Hearthold's classifier, §11 |
+| `docker-compose.ollama.yml` | Containerized Ollama for Hearthold's classifier, §11; `AEGIS_OLLAMA_MODELS` mount override for the offline bundle, §12 |
+| `deploy/offline/` | Air-gapped pack/load bundle tooling + `images.list` + README, §12 |
+| `AEGIS.md` | Fork framing / overlay guide (repo landing) |
 | `data/.gitignore` | Added `regtest-lightning/` |
 | `SANDBOX-PROFILE.md` | This document |
 
