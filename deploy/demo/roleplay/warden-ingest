@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# The WARDEN write-hosts a credential the Sovereign has already accepted into the Sovereign's PRIVATE
+# member-key KB partition (Hearthold's VC->KB bridge). The custodian holds it but cannot read it at
+# rest; only the Sovereign's key recalls it; it stays linked to the issuer's signature.
+#
+#   ./warden-ingest <credDid>
+#
+# Injects the accompanying _warden-ingest.ts into the hearthold-warden container at runtime, runs it in
+# the /data/roleplay data root, and removes it. Uses only public @hearthold APIs; Hearthold repo untouched.
+set -euo pipefail
+CRED="${1:?usage: warden-ingest <credDid>}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+docker cp "$HERE/_warden-ingest.ts" hearthold-warden:/app/scripts/_warden-ingest.ts
+docker compose -f "$CF" exec -T \
+  -e HEARTHOLD_DATA_ROOT="${ROLEPLAY_ROOT:-/data/roleplay}" \
+  -e HEARTHOLD_PASSPHRASE="${ROLEPLAY_PASS:-roleplay}" \
+  -e HEARTHOLD_CRED_DID="$CRED" \
+  warden node --experimental-strip-types scripts/_warden-ingest.ts 2>&1 | grep -vE 'ExperimentalWarning|trace-warning'
+docker exec hearthold-warden sh -c 'rm -f /app/scripts/_warden-ingest.ts' || true
