@@ -32,11 +32,14 @@ cmd="${1:-pending}"; shift || true
 case "$cmd" in
   arm)
     PIN="${1:-1379}"
+    # Always start FRESH: a long-running daemon caches the wallet in memory at startup, so a credential
+    # accepted after arming is invisible until re-arm. Kill any existing daemon first, then start clean.
+    docker compose -f "$CF" exec -T sovereign sh -c 'pkill -f "index.js control" 2>/dev/null; sleep 1' || true
     docker compose -f "$CF" exec -dT \
       -e HEARTHOLD_DATA_ROOT="$ROOT" -e HEARTHOLD_PASSPHRASE="$PASS" -e HEARTHOLD_SIGNET_PIN="$PIN" \
       sovereign node packages/sovereign/dist/index.js control "$PORT" >/dev/null 2>&1 || true
     for i in $(seq 1 15); do
-      [ -n "$(api GET /api/status 2>/dev/null)" ] && { echo "Signet armed (PIN $PIN) — control daemon serving on :$PORT, DIDComm mailbox open."; exit 0; }
+      [ -n "$(api GET /api/status 2>/dev/null)" ] && { echo "Signet armed (PIN $PIN) — fresh control daemon serving on :$PORT (wallet reloaded), DIDComm mailbox open."; exit 0; }
       sleep 1
     done
     echo "Signet daemon did not come up on :$PORT"; exit 1 ;;
