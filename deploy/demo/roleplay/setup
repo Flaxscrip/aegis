@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# Provision the role-play cast on the isolated node, all in the /data/roleplay data root:
+#   - Sovereign (you)          the person, holding the Signet
+#   - Bank (issuer)            Meridian Capital Bank — a distinct identity (its own data root)
+#   - Fund (verifier)          Meridian Growth Fund — the relying party
+#
+#   ./setup            provision (idempotent — reuses existing identities)
+#   ./setup --fresh    wipe /data/roleplay first, then provision from scratch
+#
+# Prereq: the Hearthold sandbox + Archon node are up.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+did() { grep -oE 'did:cid:[a-z0-9]+' | head -1; }
+
+if [ "${1:-}" = --fresh ]; then
+  docker compose -f "$CF" exec -T sovereign sh -c 'rm -rf /data/roleplay' && echo "wiped /data/roleplay"
+fi
+
+printf 'Sovereign (you):  %s\n' "$("$HERE/sovereign" init 2>&1 | grep -vE 'Experimental|trace-warning' | did)"
+printf 'Bank (issuer):    %s\n' "$("$HERE/bank"      init 2>&1 | grep -vE 'Experimental|trace-warning' | did)"
+printf 'Fund (verifier):  %s\n' "$("$HERE/fund"      init 2>&1 | grep -vE 'Experimental|trace-warning' | did)"
+
+cat <<'EOF'
+
+Cast provisioned. Typical flow:
+  1. (me/bank)  ./bank issue <sovereignDid> AccreditedInvestor authority='Meridian Capital' tier=accredited
+  2. (you)      ./sovereign accept <credDid>      # accept it into your wallet
+  3. (you)      ./signet arm 1379                 # arm your Signet to gate disclosures
+  4. (me/fund)  ./fund verify <sovDid> <schemaDid> <bankDid> tier=accredited   # request a proof
+  5. (you)      ./signet pending   then   ./signet approve 1379    (or ./signet deny)
+  6. (me/fund)  reads back ✓ VERIFIED (tier=accredited) — trusting the BANK's signature, not your data
+EOF

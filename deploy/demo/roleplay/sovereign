@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# YOU, the SOVEREIGN — operate your wallet against the isolated role-play containers.
+# Thin wrapper: injects the role-play data root + passphrase into the `sovereign` container.
+#
+#   ./sovereign status                 show your identity + config
+#   ./sovereign accept <credDid>       accept a 3rd-party credential into your vault
+#   ./sovereign issued                 list the credentials you hold
+#   ./sovereign help                   full verb list
+#
+# Overridable: HEARTHOLD_DIR (default ~/hearthold), ROLEPLAY_ROOT (/data/roleplay), ROLEPLAY_PASS.
+set -euo pipefail
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+exec docker compose -f "$CF" exec -T \
+  -e HEARTHOLD_DATA_ROOT="${ROLEPLAY_ROOT:-/data/roleplay}" \
+  -e HEARTHOLD_PASSPHRASE="${ROLEPLAY_PASS:-roleplay}" \
+  sovereign node packages/sovereign/dist/index.js "$@"

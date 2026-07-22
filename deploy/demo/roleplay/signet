@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# The SIGNET — your Sovereign's second factor: the step-up gate that approves (or denies) each
+# sensitive disclosure with your PIN. Runs the Sovereign control daemon inside the `sovereign`
+# container and drives its localhost-only control API (127.0.0.1:4311, never exposed to the host).
+#
+#   ./signet arm [pin]       start the daemon (default PIN 1379). It then receives proof-requests
+#                            over DIDComm and holds them pending YOUR decision.
+#   ./signet pending         show pending approval requests (what's being asked of you)
+#   ./signet approve [pin]   approve the oldest pending request with your PIN (default 1379)
+#   ./signet deny            deny the oldest pending request
+#   ./signet tui [pin]       launch the interactive Ink approver instead (needs a real terminal)
+#
+# Typical: `./signet arm` once, then a relying party requests a proof, then `./signet pending`
+# to see it and `./signet approve` (or `deny`) to decide.
+#
+# Overridable: HEARTHOLD_DIR (default ~/hearthold), ROLEPLAY_ROOT (/data/roleplay), ROLEPLAY_PASS.
+set -euo pipefail
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+ROOT="${ROLEPLAY_ROOT:-/data/roleplay}"; PASS="${ROLEPLAY_PASS:-roleplay}"; PORT=4311
+
+# curl the control API from INSIDE the sovereign container (localhost, never host-exposed).
+api() { # api <METHOD> <path> [json-body]
+  local method="$1" path="$2" body="${3:-}"
+  docker compose -f "$CF" exec -T sovereign curl -s -X "$method" \
+    ${body:+-H 'content-type: application/json' -d "$body"} \
+    "http://127.0.0.1:${PORT}${path}"
+}
+first_pending_id() { api GET /api/snapshot | python3 -c "import json,sys;p=json.load(sys.stdin).get('pending',[]);print(p[0]['id'] if p else '')" 2>/dev/null; }
+
+cmd="${1:-pending}"; shift || true
+case "$cmd" in
+  arm)
+    PIN="${1:-1379}"
+    docker compose -f "$CF" exec -dT \
+      -e HEARTHOLD_DATA_ROOT="$ROOT" -e HEARTHOLD_PASSPHRASE="$PASS" -e HEARTHOLD_SIGNET_PIN="$PIN" \
+      sovereign node packages/sovereign/dist/index.js control "$PORT" >/dev/null 2>&1 || true
+    for i in $(seq 1 15); do
+      [ -n "$(api GET /api/status 2>/dev/null)" ] && { echo "Signet armed (PIN $PIN) — control daemon serving on :$PORT, DIDComm mailbox open."; exit 0; }
+      sleep 1
+    done
+    echo "Signet daemon did not come up on :$PORT"; exit 1 ;;
+  pending)
+    api GET /api/snapshot | python3 -c "
+import json,sys
+d=json.load(sys.stdin); p=d.get('pending',[])
+print(f'{len(p)} pending approval request(s):')
+for x in p:
+    label = x.get('summary') or x.get('claim') or x.get('purpose') or x.get('kind') or json.dumps(x)[:140]
+    print('  id=%s  %s' % (x.get('id'), label))
+" 2>/dev/null || { echo 'no daemon (run: ./signet arm) or bad response'; exit 1; } ;;
+  approve|deny)
+    PIN="${1:-1379}"
+    ID="$(first_pending_id)"
+    [ -n "$ID" ] || { echo "nothing pending to $cmd"; exit 1; }
+    APPROVE=$([ "$cmd" = approve ] && echo true || echo false)
+    api POST /api/approve "$(printf '{"id":"%s","approve":%s,"pin":"%s"}' "$ID" "$APPROVE" "$PIN")"
+    echo ;;
+  tui)
+    PIN="${1:-1379}"; "$0" arm "$PIN" >/dev/null 2>&1 || true
+    exec docker compose -f "$CF" exec -it -e HEARTHOLD_CONTROL_URL="http://127.0.0.1:${PORT}" \
+      sovereign node packages/signet-tui/dist/index.js ;;
+  *) echo "usage: signet {arm [pin] | pending | approve [pin] | deny | tui [pin]}"; exit 2 ;;
+esac

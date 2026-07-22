@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# MERIDIAN GROWTH FUND — the verifier / relying party (operated by the demo runner). Challenges the
+# Sovereign to prove it holds a credential, then verifies the response against the ISSUER's signature.
+#
+#   ./fund status
+#   ./fund verify <sovereignDid> <schemaDid> <issuerDid> [claim=value ...]
+#     (sends a proof-request to the Sovereign; the Sovereign's armed Signet gates it — approve/deny)
+#
+# Overridable: HEARTHOLD_DIR (default ~/hearthold), ROLEPLAY_ROOT (/data/roleplay), ROLEPLAY_PASS.
+set -euo pipefail
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+exec docker compose -f "$CF" exec -T \
+  -e HEARTHOLD_DATA_ROOT="${ROLEPLAY_ROOT:-/data/roleplay}" \
+  -e HEARTHOLD_PASSPHRASE="${ROLEPLAY_PASS:-roleplay}" \
+  verifier node packages/verifier/dist/index.js "$@"

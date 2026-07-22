@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# The WARDEN — your home custodian. Operate it against the isolated role-play containers.
+# Thin wrapper: injects the role-play data root + passphrase into the `warden` container.
+#
+#   ./warden status               show identity + config
+#   ./warden vault                list what the custodian is holding (ciphertext at rest)
+#   ./warden classify <kind> "…"  classify a text's sensitivity on-device (Ollama)
+#   ./warden help                 full verb list
+#
+# Overridable: HEARTHOLD_DIR (default ~/hearthold), ROLEPLAY_ROOT (/data/roleplay), ROLEPLAY_PASS.
+set -euo pipefail
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+exec docker compose -f "$CF" exec -T \
+  -e HEARTHOLD_DATA_ROOT="${ROLEPLAY_ROOT:-/data/roleplay}" \
+  -e HEARTHOLD_PASSPHRASE="${ROLEPLAY_PASS:-roleplay}" \
+  warden node packages/warden/dist/index.js "$@"

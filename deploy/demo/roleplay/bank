@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# MERIDIAN CAPITAL BANK — the issuer (operated by the demo runner, not the Sovereign). A distinct
+# identity via its own data root, so it is unambiguously a third party. Runs the `sovereign` binary
+# (which can act as an issuer) in the bank's own data root.
+#
+#   ./bank status
+#   ./bank issue <sovereignDid> <CredentialType> [key=value ...]
+#     e.g.  ./bank issue did:cid:… AccreditedInvestor authority='Meridian Capital' tier=accredited
+#
+# Overridable: HEARTHOLD_DIR (default ~/hearthold), ROLEPLAY_ROOT (/data/roleplay), ROLEPLAY_PASS.
+set -euo pipefail
+CF="${HEARTHOLD_DIR:-$HOME/hearthold}/docker-compose.hearthold.yml"
+exec docker compose -f "$CF" exec -T \
+  -e HEARTHOLD_DATA_ROOT="${ROLEPLAY_ROOT:-/data/roleplay}/bank" \
+  -e HEARTHOLD_PASSPHRASE="${ROLEPLAY_PASS:-roleplay}" \
+  sovereign node packages/sovereign/dist/index.js "$@"
