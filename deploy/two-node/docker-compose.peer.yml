@@ -1,0 +1,30 @@
+# NODE A — "peer mode" opt-in overlay. Layer this on top of node A's normal compose files to CONNECT
+# node A to a peer (node B). WITHOUT this file, node A stays fully isolated (internal:true, no fallback).
+# It does two things, and nothing else:
+#   1. joins node A's gatekeeper to the shared, ALSO-internal `aegis-peer` network (so it can reach
+#      node B's gatekeeper by name — while still having no route to the public internet), and
+#   2. points node A's fallback resolver at node B's gatekeeper, so a DID node A doesn't hold locally
+#      is resolved by forwarding to the peer.
+#
+# Bring up (from repo root), after `docker network create --internal aegis-peer`:
+#   docker compose --env-file .env \
+#     -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.lightning-zap.yml \
+#     -f deploy/two-node/docker-compose.peer.yml up -d gatekeeper
+#
+# For a real second machine on the LAN, aegis-peer becomes the LAN instead; only PEER_GATEKEEPER_URL
+# changes (to http://<peer-host>:5224), not the mechanism.
+
+networks:
+  aegis-peer:
+    external: true
+
+services:
+  gatekeeper:
+    environment:
+      # Resolve DIDs node A doesn't hold by forwarding to the peer's gatekeeper (universal-resolver
+      # /1.0/identifiers convention). gatekeeper-b is node B's gatekeeper on the shared aegis-peer net.
+      - ARCHON_GATEKEEPER_FALLBACK_URL=${PEER_GATEKEEPER_URL:-http://gatekeeper-b:4224}
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [gatekeeper]

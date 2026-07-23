@@ -22,3 +22,7 @@ rust/services/gatekeeper/target/
 
 # Offline demo bundle output (multi-GB docker save + models)
 aegis-offline-bundle/
+
+# Two-node validation: node B secrets + data
+deploy/two-node/nodeb.env
+data-nodeb/

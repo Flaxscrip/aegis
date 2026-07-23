@@ -1,0 +1,194 @@
+# AEGIS NODE B — a second, self-contained Aegis node for the two-node connection validation
+# (run on THIS host alongside node A, to prove cross-node resolution + DIDComm before going to
+# a real second machine on the LAN). Uses the already-built images; no Mongo (gatekeeper uses
+# redis), no Lightning. Its own data dir (./data-nodeb), its own ports (52xx), its own internal
+# network — PLUS the shared, ALSO-internal `aegis-peer` network that node A joins too, so the two
+# gatekeepers can reach each other by name while NEITHER can reach the public internet.
+#
+# Bring up (from repo root):
+#   docker network create --internal aegis-peer 2>/dev/null || true      # once; also joined by node A
+#   docker compose -p aegisb --env-file deploy/two-node/nodeb.env -f deploy/two-node/docker-compose.nodeb.yml up -d
+#
+# The connection wiring lives in nodeb.env (node B's FALLBACK_URL -> node A) and a small node-A
+# override that joins node A's gatekeeper to aegis-peer + points node A's FALLBACK_URL -> node B.
+
+networks:
+  default:
+    name: aegisb_default
+    internal: true            # node B's own services: no route to the public internet
+  aegis-peer:
+    external: true            # the shared, internal peer link (created once; node A joins it too)
+
+services:
+  redis-b:
+    image: redis:8.0.4-alpine
+    command: redis-server --save "" --appendonly no
+    volumes:
+      - ../../data-nodeb/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  ipfs-b:
+    image: ipfs/kubo:v0.40.1
+    volumes:
+      - ../../data-nodeb/ipfs:/data/ipfs
+    healthcheck:
+      test: ["CMD-SHELL", "wget --post-data='' -qO- http://127.0.0.1:5001/api/v0/version >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  gatekeeper-b:
+    image: ghcr.io/archetech/gatekeeper-typescript
+    environment:
+      - ARCHON_GATEKEEPER_PORT=4224
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_ADMIN_API_KEY=${ARCHON_ADMIN_API_KEY}
+      - ARCHON_GATEKEEPER_DB=redis
+      - ARCHON_GATEKEEPER_DID_PREFIX=did:cid
+      - ARCHON_GATEKEEPER_REGISTRIES=local
+      - ARCHON_GATEKEEPER_REGISTRIES_PIN=
+      - ARCHON_GATEKEEPER_GC_INTERVAL=60
+      - ARCHON_GATEKEEPER_STATUS_INTERVAL=1
+      - ARCHON_GATEKEEPER_UPLOAD_LIMIT=10mb
+      # THE PEER LINK: when node B can't resolve a DID locally, forward to node A's gatekeeper
+      # (reachable by name on the shared aegis-peer network). Node A's gatekeeper serves the
+      # universal-resolver /1.0/identifiers/<did> convention that the fallback path calls.
+      - ARCHON_GATEKEEPER_FALLBACK_URL=${NODEB_FALLBACK_URL:-http://gatekeeper:4224}
+      - ARCHON_GATEKEEPER_FALLBACK_TIMEOUT=5000
+      - ARCHON_GATEKEEPER_CONFIRM_FALLBACK_URL=
+      - ARCHON_REDIS_URL=redis://redis-b:6379
+      - ARCHON_IPFS_URL=http://ipfs-b:5001/api/v0
+    volumes:
+      - ../../data-nodeb:/app/gatekeeper/data
+    user: "${ARCHON_UID}:${ARCHON_GID}"
+    ports:
+      - "5224:4224"
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$(wget -qO- http://127.0.0.1:4224/api/v1/ready)\" = \"true\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      redis-b:
+        condition: service_healthy
+      ipfs-b:
+        condition: service_healthy
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [gatekeeper-b]
+
+  keymaster-b:
+    image: ghcr.io/archetech/keymaster
+    environment:
+      - ARCHON_KEYMASTER_PORT=4226
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_ADMIN_API_KEY=${ARCHON_ADMIN_API_KEY}
+      - ARCHON_GATEKEEPER_URL=http://drawbridge-b:4222
+      - ARCHON_NODE_ID=sandbox-b
+      - ARCHON_KEYMASTER_DB=json
+      - ARCHON_ENCRYPTED_PASSPHRASE=${ARCHON_ENCRYPTED_PASSPHRASE}
+      - ARCHON_WALLET_CACHE=false
+      - ARCHON_DEFAULT_REGISTRY=local
+      - ARCHON_REDIS_URL=redis://redis-b:6379
+    volumes:
+      - ../../data-nodeb:/app/keymaster/data
+    user: "${ARCHON_UID}:${ARCHON_GID}"
+    ports:
+      - "127.0.0.1:5226:4226"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http=require('http');const req=http.get('http://127.0.0.1:4226/api/v1/ready',res=>{let b='';res.on('data',c=>b+=c);res.on('end',()=>process.exit(res.statusCode===200&&b.includes('\"ready\":true')?0:1));});req.on('error',()=>process.exit(1));"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      gatekeeper-b:
+        condition: service_healthy
+      redis-b:
+        condition: service_healthy
+
+  drawbridge-b:
+    image: ghcr.io/archetech/drawbridge
+    entrypoint: ["/bin/sh", "/scripts/drawbridge-entrypoint.sh"]
+    environment:
+      - ARCHON_DRAWBRIDGE_PORT=4222
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_ADMIN_API_KEY=${ARCHON_ADMIN_API_KEY}
+      - ARCHON_GATEKEEPER_URL=http://gatekeeper-b:4224
+      - ARCHON_LIGHTNING_MEDIATOR_URL=          # empty: no Lightning on node B
+      - ARCHON_DIDCOMM_URL=http://didcomm-b:4236
+      - ARCHON_DRAWBRIDGE_PUBLIC_HOST=${NODEB_PUBLIC_HOST:-https://nodeb.aegis.local}
+      - ARCHON_REDIS_URL=redis://redis-b:6379
+      - ARCHON_DRAWBRIDGE_L402_ENABLED=false
+      - ARCHON_HERALD_URL=                        # empty: no Herald on node B
+    volumes:
+      - ../../scripts/drawbridge-entrypoint.sh:/scripts/drawbridge-entrypoint.sh:ro
+      - ../../data-nodeb/drawbridge:/data/drawbridge
+    user: "${ARCHON_UID}:${ARCHON_GID}"
+    ports:
+      - "5222:4222"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http=require('http');const req=http.get('http://127.0.0.1:4222/api/v1/ready',res=>{let body='';res.on('data',chunk=>body+=chunk);res.on('end',()=>process.exit(res.statusCode===200&&(body.trim()==='true'||body.includes('\"ready\":true'))?0:1));});req.on('error',()=>process.exit(1));"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
+    depends_on:
+      gatekeeper-b:
+        condition: service_healthy
+      redis-b:
+        condition: service_healthy
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [drawbridge-b]
+
+  didcomm-b:
+    image: ghcr.io/archetech/didcomm
+    environment:
+      - ARCHON_DIDCOMM_PORT=4236
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_GATEKEEPER_URL=http://gatekeeper-b:4224
+      - ARCHON_DIDCOMM_DB=memory
+      - ARCHON_REDIS_URL=redis://redis-b:6379
+      # In-network delivery to private hosts (the peer's drawbridge) is allowed; still no public internet.
+      - ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS=true
+    user: "${ARCHON_UID}:${ARCHON_GID}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http=require('http');const req=http.get('http://127.0.0.1:4236/health',res=>{let body='';res.on('data',chunk=>body+=chunk);res.on('end',()=>process.exit(res.statusCode===200&&body.includes('\"ready\":true')?0:1));});req.on('error',()=>process.exit(1));"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      gatekeeper-b:
+        condition: service_healthy
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [didcomm-b]
+
+  cli-b:
+    image: ghcr.io/archetech/cli
+    environment:
+      - ARCHON_GATEKEEPER_URL=http://gatekeeper-b:4224
+      - ARCHON_KEYMASTER_URL=http://keymaster-b:4226
+      - ARCHON_ADMIN_API_KEY=${ARCHON_ADMIN_API_KEY}
+      - ARCHON_IPFS_URL=http://ipfs-b:5001/api/v0
+    volumes:
+      - ../../share:/app/share
+    user: "${ARCHON_UID}:${ARCHON_GID}"
+    command: ["tail", "-f", "/dev/null"]
+    depends_on:
+      gatekeeper-b:
+        condition: service_healthy
+      keymaster-b:
+        condition: service_healthy
