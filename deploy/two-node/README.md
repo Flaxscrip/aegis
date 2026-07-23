@@ -73,6 +73,44 @@ BOB=$(docker exec aegisb-cli-b-1 node scripts/archon-cli.js create-id bob | grep
 docker exec archon-gatekeeper-1 node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log(e.code))'  # ENETUNREACH
 ```
 
+## Security: two peering models — resolution (safe) vs. hyperswarm (bulk)
+
+There are two very different ways two Archon nodes can share DIDs, and the
+difference matters a lot on a friend's LAN:
+
+- **Fallback resolution (what this guide uses):** *on-demand, one DID at a time.*
+  Node A asks node B to resolve a specific DID when it needs it. Nothing is
+  bulk-copied; you disclose only what you look up. This is the safe, deliberate
+  model.
+- **Hyperswarm (bulk gossip):** *replicates your ENTIRE DID database* to any peer
+  it discovers on its **topic**. The topic is derived (`sha256`) from
+  `ARCHON_PROTOCOL`, whose upstream default — `/ARCHON/v0.8-beta` — is **shared by
+  every Archon node in existence**. On a shared LAN, mDNS/local discovery doesn't
+  even need the public DHT: two nodes on that default topic would silently
+  replicate everything to each other.
+
+**Hardening (built into install):** the Aegis profile sets `ARCHON_PROTOCOL` to a
+**unique random topic** instead of the shared default, so hyperswarm bulk-sync is
+**opt-in** — it only happens between nodes that *deliberately* set the same value
+(a private swarm between trusted friends), never by accident.
+
+This is **not a value we ship** — a hardcoded "random" topic committed to the repo
+is not random: every install that copied it would share it, recreating the exact
+footgun. Instead each node **mints its own** at setup time. `deploy/setup-node.sh`
+does this as step one of standing up a node (alongside a unique admin key and
+wallet passphrase — same reasoning: no shared secrets across installs):
+
+```bash
+deploy/setup-node.sh          # generates .env with a fresh /aegis-private/<random> topic
+                              # (do it by hand if you must: openssl rand -hex 32)
+```
+
+(Hyperswarm is off in the isolated profile anyway, so this is defense-in-depth —
+but it's exactly the kind of default you want hardened *before* a laptop full of
+private history joins someone else's network. Because it's generated per install,
+the default is *safe by construction*: two Aegis nodes never share a topic unless
+their operators choose to.)
+
 ## Going to a real second machine (same LAN)
 
 The only thing that changes is the *transport* of the peer link. Instead of a

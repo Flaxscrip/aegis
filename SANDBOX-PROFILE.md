@@ -44,6 +44,12 @@ this profile.
 
 ## 2. `.env` (sandbox-relevant settings; full file at repo root, gitignored)
 
+**Bootstrap it with `deploy/setup-node.sh`** — one command produces this exact
+hardened `.env` from `sample.env`, generating the values that must be *unique per
+install* (admin key, wallet passphrase, and the hyperswarm topic — see §7). Do
+not commit a filled-in `.env`; a shared "random" value copied across installs is
+no longer random. The script is the canonical "stand up an isolated node" step.
+
 ```env
 ARCHON_UID=502
 ARCHON_GID=20
@@ -56,11 +62,17 @@ ARCHON_NODE_NAME=sandbox
 # node). No hyperswarm, no chain mediators, no Lightning/Drawbridge.
 COMPOSE_PROFILES=cli
 
+# Generated per install by setup-node.sh — never shared, never committed.
 ARCHON_ADMIN_API_KEY=<openssl rand -hex 32>
 ARCHON_ENCRYPTED_PASSPHRASE=<openssl rand -hex 16>
 
 ARCHON_GATEKEEPER_REGISTRIES=local
 ARCHON_DEFAULT_REGISTRY=local
+
+# Unique private hyperswarm topic (§7): even though hyperswarm is off in this
+# profile, setup-node.sh mints a per-install topic so bulk gossip-sync can never
+# happen by accident on a shared LAN — only between nodes that set the SAME value.
+ARCHON_PROTOCOL=/aegis-private/<openssl rand -hex 32>
 
 # Blanked — this pointed off-box (https://dev.uniresolver.io) and would
 # only ever time out under isolation. Defense in depth, not required for
@@ -352,6 +364,41 @@ documented here as an opt-in for anyone who specifically needs
 challenges/polls/dmail; it was not made the default. (Test identities
 `warden-hs` / `emissary-hs` created for this experiment remain in the
 wallet; harmless, not otherwise referenced.)
+
+## 7. Hardened default: a unique per-install hyperswarm topic (`ARCHON_PROTOCOL`)
+
+Even with hyperswarm off in this profile, the *value* of `ARCHON_PROTOCOL`
+matters the moment a node is carried onto a shared network — so we harden it as
+a first-class install default.
+
+**The footgun.** If hyperswarm is ever enabled, Archon replicates the node's
+**entire DID database** to any peer it discovers on its **topic**. The topic is
+`sha256(ARCHON_PROTOCOL)` (`hyperswarm-mediator.ts:758`), and the upstream
+default — `/ARCHON/v0.8-beta` — is **shared by every Archon node in existence**.
+On a shared LAN, mDNS/local discovery doesn't even need the public DHT: two nodes
+sitting on that default topic would silently bulk-replicate to each other. The
+scenario we care about is exactly the friendly one — a laptop full of private
+history joining a friend's home network — where "isolated" must not quietly mean
+"syncing everything to whoever else runs Archon here."
+
+**Why not just ship a random default.** A hardcoded "random" topic committed to
+the repo is *not random*: every install that copied it would share it, recreating
+the same shared-topic footgun with a different constant. The only correct default
+is one **generated per install**.
+
+**The fix.** `deploy/setup-node.sh` mints `ARCHON_PROTOCOL=/aegis-private/$(openssl
+rand -hex 32)` when it creates the `.env` (same treatment as the admin key and
+wallet passphrase — no shared secrets across installs). Result: hyperswarm
+bulk-sync becomes **opt-in by construction** — it can only occur between nodes
+whose operators *deliberately* set the **same** topic (a private swarm between
+trusted friends), never by accident. Two Aegis nodes never share a topic unless
+someone chooses it.
+
+This is defense-in-depth for the `local`-only profile (hyperswarm isn't running),
+but it's precisely the default you want hardened *before*, not after, the first
+time a node leaves its own machine. Cross-node work in this repo uses the safe
+peering model instead — **on-demand fallback resolution**, one DID at a time
+(`deploy/two-node/README.md`), never bulk gossip.
 
 ## 8. Stretch goal: local regtest Lightning network, fully offline
 
