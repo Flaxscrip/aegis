@@ -74,3 +74,17 @@ On two nodes with **no shared registry** (only mutual DID resolution), issuer ag
 delivers a VC to subject agent B over DIDComm; B accepts it, and verification resolves
 A's issuer DID **fresh** (A never imported/cached on B). Works identically on a shared-
 registry deployment (where it can short-circuit to the native notice path).
+
+**Executable acceptance test (already exists):** `deploy/two-node/pass-card-didcomm.sh`
+proves the transport, and `deploy/two-node/harness-credential-exchange.sh` is the
+acceptance harness in Hearthold's vocabulary (issuer agent / subject agent / credential —
+10 assertions incl. isolation + the divergence check). Its PHASE 4 has a marked seam:
+replace the `pass-card-didcomm.sh` call with Hearthold's `deliverCredential(...)` and the
+harness should still pass 10/10.
+
+## Environment (where to test)
+The isolated two-node substrate is live: `~/isolation/aegis` on this host. Node A containers
+are `aegis-*` (project `aegis`), node B is `aegisb-*`, both on the internal `aegis-peer`
+network with mutual fallback resolution and no public egress. The Hearthold agent containers
+(`hearthold-*`) already run on node A's `archon_default` network. Run the harness from
+`~/isolation/aegis`. (Aegis owns this substrate; you build in `~/hearthold`.)

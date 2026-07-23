@@ -24,6 +24,32 @@ B, which returns the full resolved document. Point them at each other (A→B, B�
 and DIDs resolve across the pair — no public DHT, no hyperswarm, no shared
 registry. DIDs stay on their home node; resolution travels.
 
+### Fallback resolver modes: peer (private) vs. public (SaaS) vs. chained
+
+`ARCHON_GATEKEEPER_FALLBACK_URL` is a general **read-only resolver** hook, and it has more
+than one useful target. The local gatekeeper always stays the **authority for the Sovereign's
+own (private) DIDs** — creation and updates never leave the box. The fallback only *reads*
+DIDs the node doesn't hold. That opens three modes:
+
+| Mode | Fallback points at | Enables | Isolation |
+|------|--------------------|---------|-----------|
+| **Peer** (this guide) | a trusted friend's gatekeeper | resolve each other's private DIDs | full — `internal:true`, no public egress |
+| **Public** | a public **SaaS gatekeeper** (Bitcoin + other registries) | opt-in "public DID resolution" — resolve DIDs anchored on public networks (a bank's DID, a DID you migrated to Bitcoin) | **scoped** — the gatekeeper needs egress to *that one resolver host*, nothing else |
+| **Chained** | peer, whose *own* fallback → public | both at once, hop by hop | peer stays private; only the outermost hop is public |
+
+The **public** mode is the clean way to give a Sovereign optional public reach **without
+de-isolating their node**: private DID management stays local and offline; a separate,
+read-only public gatekeeper answers "what is *this* DID on Bitcoin?" It's the natural
+complement to DID **migration** — once you move a years-old private DID onto Bitcoin, a
+public fallback is what lets anyone (including your future self) resolve it.
+
+Tradeoffs to design around: (1) it's egress, so it belongs on a **scoped** path (a bridge
+sidecar or firewall rule to the resolver host only), not a blanket `internal:false`; (2) a
+public resolver **sees which DIDs you look up** — a metadata/privacy leak the Sovereign opts
+into knowingly; (3) Archon core currently supports **one** fallback URL, so true "peer *and*
+public" needs either the peer to chain onward or a core enhancement to accept a fallback
+**list**. Worth raising with macterra alongside the fallback-capable-`verifyOperation` ask.
+
 ### The regtest / `local`-registry caveat
 
 Everything here is on the `local` registry (and, for Lightning, regtest). That
