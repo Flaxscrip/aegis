@@ -34,6 +34,52 @@ friend": no permanent global footprint. Joining the *public* network (permanent
 registration on a real registry) is a separate, later step — deliberately out of
 scope here.
 
+## Resolution carries public docs, NOT encrypted content (and how to pass a card)
+
+Cross-node **resolution** (the fallback) returns only the W3C DID Resolution
+triple — `didDocument` + metadata (`identifiers-router.ts:72-76`). It **omits
+`didDocumentData`**, where Archon keeps an asset's *encrypted* payload (a VC's
+ciphertext, an encrypted message). That's exposed separately at
+`/1.0/identifiers/{did}/data`, which the fallback client does **not** fetch. So:
+
+- **Public, on-demand:** resolving an identity, verifying a signature, reading a
+  public DID document — all work across the peer via resolution alone. ✅
+- **Private content does NOT leak over the peer:** an encrypted VC that lives on
+  node A cannot be pulled+decrypted by node B from its DID alone — the ciphertext
+  never crosses. `accept-credential <peer-did>` fails with `did not encrypted`.
+  This is a *feature*: the peer link discloses public identity, never private
+  content in bulk.
+
+**To pass an encrypted card between nodes**, transfer its *content* explicitly
+with the gatekeeper admin export/import (`scripts/admin-cli.js`, present in the
+`cli` containers). Order matters — import the **controller (issuer) DID first**,
+then the asset, because imported ops **defer** until their controller resolves
+locally (`gatekeeper.ts:1126-1130`):
+
+```bash
+adminA(){ docker exec archon-cli-1     node scripts/admin-cli.js "$@"; }
+adminB(){ docker exec aegisb-cli-b-1   node scripts/admin-cli.js "$@"; }
+
+adminA export-did "$ISSUER" > share/issuer.json     # 1. controller FIRST
+adminA export-did "$SCHEMA" > share/schema.json     # 2. schema (if used)
+adminA export-did "$VC"     > share/vc.json          # 3. the card
+adminB import-did /app/share/issuer.json
+adminB import-did /app/share/schema.json
+adminB import-did /app/share/vc.json
+adminB process-events        # applies queued ops (added:N, pending:0 when done)
+# now the VC resolves LOCALLY on node B with its ciphertext → accept-credential works
+```
+
+(In production the natural transport for this is **DIDComm** — it packs the
+encrypted card into a message and delivers it over the LAN — same idea, no manual
+export.) `local` here means propagation is **selective**: you move exactly the
+DIDs you choose. If instead you want assets to *auto*-propagate between two nodes,
+put agents **and** assets on the `hyperswarm` registry and run a mediator on your
+shared private `ARCHON_PROTOCOL` topic (§ Security below) — that's ambient bulk
+sync between deliberate peers. Note the constraint: a `local` agent cannot anchor
+a `hyperswarm` asset (its controller wouldn't resolve for hyperswarm peers), so
+agent and asset registries must be compatible.
+
 ## Validate it on ONE host first (what this dir does)
 
 Before wiring two physical machines, prove the whole thing on a single host by
