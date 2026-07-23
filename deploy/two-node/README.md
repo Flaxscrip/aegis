@@ -80,6 +80,81 @@ sync between deliberate peers. Note the constraint: a `local` agent cannot ancho
 a `hyperswarm` asset (its controller wouldn't resolve for hyperswarm peers), so
 agent and asset registries must be compatible.
 
+## Passing a card over DIDComm (the native transport)
+
+Manual export/import is a sneakernet. The real transport is **DIDComm** — an
+encrypted, authenticated message delivered node-to-node over the peer link. Wired
+up here and validated end to end (`pass-card-didcomm.sh`).
+
+Wiring (already in `docker-compose.peer.yml`): node A's **didcomm** service joins
+`aegis-peer` (it makes the outbound delivery POST) and has
+`ARCHON_DIDCOMM_ALLOW_PRIVATE_EGRESS=true` (to POST to a private/LAN host over
+http — still no public internet). Each side publishes a reachable mailbox:
+
+```bash
+clib publish-didcomm http://drawbridge-b:4222/didcomm   # recipient (Bob)
+clia publish-didcomm http://drawbridge:4222/didcomm     # sender (needed for authcrypt)
+```
+
+The published `DIDCommMessaging` service lives in the DID **document**, so it
+crosses the peer via ordinary resolution. Delivery path:
+`send-didcomm` → sender's own drawbridge `/didcomm/api/v1/deliver` → sender's
+didcomm service POSTs to `http://drawbridge-b:4222/didcomm/api/v1/messages` →
+recipient runs `receive-didcomm` to fetch + unpack.
+
+**DIDComm does not auto-import the credential asset.** `receiveDidComm` only
+unpacks the message; the native auto-accept path (`searchNotices`) runs over the
+*registry*, which doesn't cross `local` nodes. So the message carries the **card
+bundle** — issuer + schema + VC ops — and the recipient imports it, then accepts:
+
+```bash
+deploy/two-node/pass-card-didcomm.sh <sender-id> <recipient-DID> <vc-DID> [recipient-id]
+```
+
+### Two lessons this surfaced (offline-first divergence + the chatty protocol)
+
+The first cross-node DIDComm send silently failed (`receive-didcomm` returned
+`[]`). Root cause: Bob had **imported Ada's Agent DID earlier**, and Ada later ran
+`publish-didcomm` (adding her key-agreement key). Bob's **stale local copy shadowed
+the peer**, so he never saw Ada's new key → authcrypt unpack failed (and
+`receiveDidComm` swallows unpack errors, `keymaster.ts:2794`). Re-syncing Ada's
+newer ops fixed it — the exact offline-first reconciliation problem: an imported
+copy of a **mutable** identity goes stale the moment its owner updates it while
+disconnected.
+
+The fix is a **rule about what to cache**:
+
+| DID kind | Mutable? | Strategy |
+|----------|----------|----------|
+| **Agent** (identity/issuer) | yes — keys rotate, services get added | **Never import. Resolve fresh over the peer each exchange** (the "chatty protocol" — a little network chatter, never stale). |
+| **Asset** (a VC) | no — issued once | Transfer the content once; caching is safe. |
+
+Had Ada never been imported, Bob's `receiveDidComm` would have resolved her
+**fresh** via the peer fallback and unpacked on the first try. Fresh resolution is
+*already* how keymaster-level operations (unpack, verify, resolve) work — they go
+through the HTTP resolve path, which is fallback-capable.
+
+**The one gap:** importing a VC still needs its issuer resolvable by the **core**
+gatekeeper (`verifyOperation` → local-only `resolveDID`, `gatekeeper.ts:460`). The
+peer fallback (`resolveFromUniversalResolver`) is a **server-layer** wrapper the
+core never calls — so an asset import currently requires the issuer *locally
+present*, which is the only reason the bundle ships the issuer at all. Making the
+core verify path fallback-capable (and honoring `versionTime`, which the current
+fallback drops) would let a node import-and-verify an asset against a
+freshly-resolved issuer it never has to cache. Worth raising with Archon core.
+
+## Where this lives: Aegis vs. Hearthold
+
+Aegis is the **egress-isolated deployment** of Hearthold, not the app. So:
+- **Archon core** owns the DIDComm primitives (`send/receive/pack/unpack`, notices).
+- **Aegis** (this repo) owns the isolated **transport substrate** — the peer
+  network, `ALLOW_PRIVATE_EGRESS`, and thin scripts that exec into the isolated
+  containers (`pass-card-didcomm.sh`, the roleplay wrappers).
+- **Hearthold / Sevenfold** should own the card-passing **protocol** (bundle shape,
+  send/accept semantics, the cache rule above) as a portable feature that works on
+  *any* Archon deployment — isolated or public. `pass-card-didcomm.sh` is a
+  transport **demo/validation**, not the home for that protocol.
+
 ## Validate it on ONE host first (what this dir does)
 
 Before wiring two physical machines, prove the whole thing on a single host by

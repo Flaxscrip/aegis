@@ -28,3 +28,24 @@ services:
       default: {}
       aegis-peer:
         aliases: [gatekeeper]
+
+  # DIDComm delivery egress: send-didcomm hands the sealed envelope to node A's OWN drawbridge
+  # (/didcomm/api/v1/deliver), which the didcomm service then POSTs to the recipient's published
+  # endpoint (http://drawbridge-b:4222/didcomm/api/v1/messages). That outbound call is made BY this
+  # service, so it must be on aegis-peer to reach the peer. ALLOW_PRIVATE_EGRESS=true (set in the base
+  # override) lets it POST to the private/LAN host over http — still no route to the public internet.
+  didcomm:
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [didcomm]
+
+  # Return-direction receiver: for Bob→Ada delivery, node B's didcomm POSTs to the endpoint Ada
+  # publishes (http://drawbridge:4222/didcomm). That endpoint is THIS drawbridge, so it must be
+  # reachable on aegis-peer by the alias `drawbridge`. (Ada→Bob alone doesn't need this; it makes
+  # the link symmetric.)
+  drawbridge:
+    networks:
+      default: {}
+      aegis-peer:
+        aliases: [drawbridge]
