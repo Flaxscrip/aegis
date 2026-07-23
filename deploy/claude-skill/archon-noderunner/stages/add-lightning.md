@@ -46,7 +46,7 @@ Once this stage completes:
    - Operator's CLN public key (`getinfo` output)
    - Public IP + port 9735
    - Suggested inbound options: request a channel from a routing node (Amboss, LN+, LNBIG), or ask the operator to arrange it out-of-band
-   - Command they can run manually to open outbound: `docker exec archon-cln-mainnet-node-1 lightning-cli --lightning-dir=/data/lightning/bitcoin --network=bitcoin fundchannel <pubkey> <amount>` — **but do not run it**
+   - Command they can run manually to open outbound: `docker exec aegis-cln-mainnet-node-1 lightning-cli --lightning-dir=/data/lightning/bitcoin --network=bitcoin fundchannel <pubkey> <amount>` — **but do not run it**
 
    Wait for the operator to confirm at least one active channel exists (`num_active_channels: ≥1`), then proceed.
 
@@ -57,7 +57,7 @@ Once this stage completes:
 ## Common failures
 
 - **CLN stuck on chain sync**: usually bitcoind isn't caught up. Point them at BTC mediator status.
-- **LNbits 500 on first hit**: race between LNbits startup and CLN readiness. `docker restart archon-lnbits-1` after CLN is fully up.
+- **LNbits 500 on first hit**: race between LNbits startup and CLN readiness. `docker restart aegis-lnbits-1` after CLN is fully up.
 - **L402 challenges failing**: check that drawbridge sees LNBits admin key; missing key silently 401s.
 
 ## Rollback

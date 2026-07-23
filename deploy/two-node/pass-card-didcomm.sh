@@ -34,7 +34,7 @@ RECIPIENT="${2:?recipient DID}"
 VC="${3:?VC (card) DID}"
 
 # containers (override for a real two-machine LAN split)
-CLI_A="${AEGIS_CLI_A:-archon-cli-1}"          # sender node
+CLI_A="${AEGIS_CLI_A:-aegis-cli-1}"          # sender node
 CLI_B="${AEGIS_CLI_B:-aegisb-cli-b-1}"         # recipient node
 SHARE="${AEGIS_SHARE:-share}"                   # host dir mounted at /app/share in BOTH clis
 cd "$(dirname "$0")/../.."                       # repo root

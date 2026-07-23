@@ -50,7 +50,7 @@ exposure.*
 
 ```bash
 # 1. Core capabilities on
-docker exec archon-cli-1 node -e \
+docker exec aegis-cli-1 node -e \
   "require('http').get('http://drawbridge:4222/api/v1/capabilities',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log(b))})"
 # want: {"didcomm":true,"lightning":true,"names":true}
 
@@ -77,10 +77,10 @@ Symptom: zap returns `{"error":"[object Object]"}`; mediator log says
 null backend. Fix:
 
 ```bash
-cd ~/isolation/archon
+cd ~/isolation/aegis
 # CLN won't restart if a stale RPC socket is left in the data dir (entrypoint's
 # chown on it fails under set -e -> exit 1). Remove it, then restart:
-docker inspect archon-cln-mainnet-node-1 --format '{{.State.Status}}'   # 'exited'? then:
+docker inspect aegis-cln-mainnet-node-1 --format '{{.State.Status}}'   # 'exited'? then:
 rm -f data/cln-mainnet/regtest/regtest/lightning-rpc
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.yml \
   -f docker-compose.lightning-zap.yml up -d cln-mainnet-node
@@ -88,7 +88,7 @@ docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.
 # (a plain restart/up is a no-op — compose sees no change; --force-recreate is required):
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.override.yml \
   -f docker-compose.lightning-zap.yml up -d --force-recreate --no-deps lnbits
-docker logs archon-lnbits-1 2>&1 | grep -i "CoreLightningWallet connected"   # want this line
+docker logs aegis-lnbits-1 2>&1 | grep -i "CoreLightningWallet connected"   # want this line
 ```
 
 **Terminal layout for the live run:** three panes —
@@ -131,7 +131,7 @@ runs on this one box, with no internet. Not 'we don't call out much.' *Cannot.*"
 **Show:**
 ```bash
 # The whole stack is on a Docker network created internal:true — no route out.
-docker exec archon-gatekeeper-1 node -e \
+docker exec aegis-gatekeeper-1 node -e \
   'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log("egress →",e.code))'
 # → egress → ENETUNREACH
 
@@ -286,8 +286,8 @@ over Lightning, on our air-gapped node."
 verified in SANDBOX-PROFILE.md §9):
 ```bash
 # payer (warden-test) balance before
-ADMIN_KEY=$(grep ^ARCHON_ADMIN_API_KEY= ~/isolation/archon/.env | cut -d= -f2)
-lnbal() { docker exec archon-cli-1 node -e "const h=require('http');const r=h.request({hostname:'keymaster',port:4226,path:'/api/v1/lightning/balance',method:'POST',headers:{'Content-Type':'application/json','Content-Length':2,'X-Archon-Admin-Key':'$ADMIN_KEY'}},x=>{let b='';x.on('data',c=>b+=c);x.on('end',()=>console.log(b))});r.end('{}')"; }
+ADMIN_KEY=$(grep ^ARCHON_ADMIN_API_KEY= ~/isolation/aegis/.env | cut -d= -f2)
+lnbal() { docker exec aegis-cli-1 node -e "const h=require('http');const r=h.request({hostname:'keymaster',port:4226,path:'/api/v1/lightning/balance',method:'POST',headers:{'Content-Type':'application/json','Content-Length':2,'X-Archon-Admin-Key':'$ADMIN_KEY'}},x=>{let b='';x.on('data',c=>b+=c);x.on('end',()=>console.log(b))});r.end('{}')"; }
 
 # the zap: payer → payee by DID, amount + memo (see §9 for the full call)
 #   POST /api/v1/lightning/zap {did:<payee DID>, amount:10000, memo:"invoice 7781"}

@@ -22,7 +22,11 @@ networks:
 services:
   redis-b:
     image: redis:8.0.4-alpine
-    command: redis-server --save "" --appendonly no
+    # PERSISTENT: gatekeeper-b keeps its DID database here (ARCHON_GATEKEEPER_DB=redis). With
+    # persistence OFF, a restart wipes every node-B DID (node A survives because it uses mongodb).
+    # A portable isolated node (e.g. a friend's laptop that gets shut down) MUST retain its DIDs,
+    # so enable AOF to the mounted volume.
+    command: redis-server --appendonly yes
     volumes:
       - ../../data-nodeb/redis:/data
     healthcheck:

@@ -57,7 +57,7 @@ then the asset, because imported ops **defer** until their controller resolves
 locally (`gatekeeper.ts:1126-1130`):
 
 ```bash
-adminA(){ docker exec archon-cli-1     node scripts/admin-cli.js "$@"; }
+adminA(){ docker exec aegis-cli-1     node scripts/admin-cli.js "$@"; }
 adminB(){ docker exec aegisb-cli-b-1   node scripts/admin-cli.js "$@"; }
 
 adminA export-did "$ISSUER" > share/issuer.json     # 1. controller FIRST
@@ -191,7 +191,7 @@ BOB=$(docker exec aegisb-cli-b-1 node scripts/archon-cli.js create-id bob | grep
 ./archon resolve-did "$BOB"
 
 # isolation still holds on both, even connected:
-docker exec archon-gatekeeper-1 node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log(e.code))'  # ENETUNREACH
+docker exec aegis-gatekeeper-1 node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log(e.code))'  # ENETUNREACH
 ```
 
 ## Security: two peering models — resolution (safe) vs. hyperswarm (bulk)

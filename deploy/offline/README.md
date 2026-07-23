@@ -68,7 +68,7 @@ docker compose -f docker-compose.ollama.yml up -d
 The whole point — after bring-up, on the target:
 
 ```bash
-docker exec archon-gatekeeper-1 \
+docker exec aegis-gatekeeper-1 \
   node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log("egress:",e.code))'
 # → egress: ENETUNREACH
 ```

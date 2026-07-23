@@ -730,13 +730,13 @@ at any point.
 ### Isolation proof (same pattern as §3/§8, repeated for the new containers)
 
 ```
-$ docker exec archon-cln-mainnet-node-1 curl -m5 http://1.1.1.1
+$ docker exec aegis-cln-mainnet-node-1 curl -m5 http://1.1.1.1
 curl: (7) Failed to connect to 1.1.1.1 port 80 after 0 ms: Couldn't connect to server
-$ docker exec archon-lnbits-1 curl -m5 http://1.1.1.1
+$ docker exec aegis-lnbits-1 curl -m5 http://1.1.1.1
 curl: (7) Failed to connect to 1.1.1.1 port 80 after 0 ms: Couldn't connect to server
-$ docker exec archon-lightning-mediator-1 node -e "http.get({host:'1.1.1.1',...})"
+$ docker exec aegis-lightning-mediator-1 node -e "http.get({host:'1.1.1.1',...})"
 ERROR (expected): connect ENETUNREACH 1.1.1.1:80 - Local (0.0.0.0:0)
-$ docker exec archon-drawbridge-1 node -e "http.get({host:'1.1.1.1',...})"
+$ docker exec aegis-drawbridge-1 node -e "http.get({host:'1.1.1.1',...})"
 ERROR (expected): connect ENETUNREACH 1.1.1.1:80 - Local (0.0.0.0:0)
 ```
 

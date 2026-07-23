@@ -65,6 +65,6 @@ and fail off-network). Point Ollama at the unpacked models via AEGIS_OLLAMA_MODE
   # ...plus the lightning-zap / didcomm services as documented.
 
 Then prove the air gap held:
-  docker exec archon-gatekeeper-1 node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log(e.code))'
+  docker exec aegis-gatekeeper-1 node -e 'require("http").get({host:"1.1.1.1",port:80,timeout:5000},()=>{}).on("error",e=>console.log(e.code))'
   # -> ENETUNREACH
 EOF

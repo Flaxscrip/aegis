@@ -49,7 +49,12 @@ set_env ARCHON_PROTOCOL             "/aegis-private/$(openssl rand -hex 32)"
 # --- Isolation defaults ---
 set_env ARCHON_UID                             "$(id -u)"
 set_env ARCHON_GID                             "$(id -g)"
-set_env COMPOSE_PROFILES                       "cli"
+# Project name `aegis` => containers are named aegis-* (this is the isolated point-to-point
+# deployment, visibly distinct from stock Archon). Profiles: cli + the DIDComm relay/drawbridge
+# (needed for agent messaging + cross-node credential delivery). Deliberately NOT hyperswarm or
+# any btc/eth/sol/zcash mediator — those require public egress and would break isolation.
+set_env COMPOSE_PROJECT_NAME                    "aegis"
+set_env COMPOSE_PROFILES                       "cli,didcomm,drawbridge"
 set_env ARCHON_GATEKEEPER_REGISTRIES           "local"
 set_env ARCHON_DEFAULT_REGISTRY                "local"
 set_env ARCHON_GATEKEEPER_FALLBACK_URL         ""

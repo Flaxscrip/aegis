@@ -18,6 +18,13 @@
 # reproduces this profile with no extra flags.
 networks:
   default:
+    # Pinned name (NOT project-prefixed). The Compose project is `aegis` (COMPOSE_PROJECT_NAME),
+    # so containers are named `aegis-*` for admin clarity — this is the isolated point-to-point
+    # deployment, distinct from stock Archon. But the shared node network keeps the name
+    # `archon_default` because the Hearthold agent containers (and the ollama/lightning aux stacks)
+    # attach to it by that name; renaming it would need a coordinated Hearthold compose change.
+    # internal:true still enforces zero public egress.
+    name: archon_default
     internal: true
 
 services:

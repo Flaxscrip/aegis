@@ -16,7 +16,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 
-CLI_A="${AEGIS_CLI_A:-archon-cli-1}"       # issuer's node
+CLI_A="${AEGIS_CLI_A:-aegis-cli-1}"       # issuer's node
 CLI_B="${AEGIS_CLI_B:-aegisb-cli-b-1}"      # subject's node
 ISSUER="${ISSUER_AGENT:-issuer-agent}"
 SUBJECT="${SUBJECT_AGENT:-subject-agent}"
