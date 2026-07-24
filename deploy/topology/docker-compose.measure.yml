@@ -1,0 +1,84 @@
+# Measurement node for the topology cost study (CONTAINER-TOPOLOGY.md §4).
+# A full PRIVATE/SPHERE node: gatekeeper (hyperswarm registry) + keymaster + ipfs + redis +
+# hyperswarm-mediator. Egress-enabled (NOT internal:true) so the mediator can reach the DHT.
+# Vary ONLY $ARCHON_PROTOCOL (the topic) to isolate gossip-exposure cost from existence cost:
+#   - unique random topic  -> PRIVATE (peerless)
+#   - shared topic          -> SPHERE (run a second project on the same topic)
+#   - /ARCHON/v0.8-beta      -> busy public topic (scaling curve)
+#
+#   ARCHON_PROTOCOL=/measure/$(openssl rand -hex 16) \
+#     docker compose -p meas1 -f deploy/topology/docker-compose.measure.yml up -d
+
+services:
+  redis:
+    image: redis:8.0.4-alpine
+    command: redis-server --appendonly yes
+    volumes: [m-redis:/data]
+    healthcheck: { test: ["CMD","redis-cli","ping"], interval: 10s, timeout: 5s, retries: 6 }
+
+  ipfs:
+    image: ipfs/kubo:v0.40.1
+    volumes: [m-ipfs:/data/ipfs]
+    healthcheck:
+      test: ["CMD-SHELL","wget --post-data='' -qO- http://127.0.0.1:5001/api/v0/version >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  gatekeeper:
+    image: ghcr.io/archetech/gatekeeper-typescript
+    environment:
+      - ARCHON_GATEKEEPER_PORT=4224
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_GATEKEEPER_DB=redis
+      - ARCHON_GATEKEEPER_REGISTRIES=local,hyperswarm    # hyperswarm registry -> ops queue for the mediator
+      - ARCHON_DEFAULT_REGISTRY=hyperswarm
+      - ARCHON_GATEKEEPER_DID_PREFIX=did:cid
+      - ARCHON_ADMIN_API_KEY=measure-key
+      - ARCHON_REDIS_URL=redis://redis:6379
+      - ARCHON_IPFS_URL=http://ipfs:5001/api/v0
+    healthcheck:
+      test: ["CMD-SHELL","test \"$(wget -qO- http://127.0.0.1:4224/api/v1/ready)\" = \"true\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      redis: { condition: service_healthy }
+      ipfs:  { condition: service_healthy }
+
+  keymaster:
+    image: ghcr.io/archetech/keymaster
+    environment:
+      - ARCHON_KEYMASTER_PORT=4226
+      - ARCHON_NODE_ID=measure
+      - ARCHON_NODE_NAME=measure
+      - ARCHON_BIND_ADDRESS=0.0.0.0
+      - ARCHON_ADMIN_API_KEY=measure-key
+      - ARCHON_GATEKEEPER_URL=http://gatekeeper:4224
+      - ARCHON_KEYMASTER_DB=redis
+      - ARCHON_ENCRYPTED_PASSPHRASE=measure-pp
+      - ARCHON_DEFAULT_REGISTRY=local
+      - ARCHON_REDIS_URL=redis://redis:6379
+    depends_on:
+      gatekeeper: { condition: service_healthy }
+
+  hyperswarm-mediator:
+    image: ghcr.io/archetech/hyperswarm-mediator
+    environment:
+      - ARCHON_GATEKEEPER_URL=http://gatekeeper:4224
+      - ARCHON_KEYMASTER_URL=http://keymaster:4226
+      - ARCHON_IPFS_URL=http://ipfs:5001/api/v0
+      - ARCHON_ADMIN_API_KEY=measure-key
+      - ARCHON_NODE_ID=${ARCHON_NODE_ID:-measure}
+      - ARCHON_NODE_NAME=${ARCHON_NODE_NAME:-measure}
+      - ARCHON_PROTOCOL=${ARCHON_PROTOCOL:?set ARCHON_PROTOCOL (the topic)}
+      - ARCHON_HYPR_EXPORT_INTERVAL=${ARCHON_HYPR_EXPORT_INTERVAL:-30}
+      - ARCHON_HYPR_METRICS_PORT=4232
+    depends_on:
+      gatekeeper: { condition: service_healthy }
+
+volumes:
+  m-redis:
+  m-ipfs:
