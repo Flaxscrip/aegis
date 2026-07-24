@@ -114,6 +114,15 @@ the topic delivers volume: the same mediator on an open public topic doubles, an
 A SPHERE stays cheap precisely because its shared topic bounds the DID volume to its members. The
 DMZ (no mediator) is the floor: it receives nothing, so it costs nothing beyond serving what you import.
 
+**Image architecture caveat (found on gamerflax).** The `ghcr.io/archetech/*` images are published
+**linux/arm64 only** (built on Apple Silicon). An **amd64/x86-64** peer (e.g. gamerflax) can't run them
+natively — the gatekeeper exits 255. Two fixes: (a) **emulate** — `docker run --privileged --rm
+tonistiigi/binfmt --install arm64`, then add `-f deploy/topology/docker-compose.emulate-arm64.yml` (forces
+the three Node services onto arm64 under qemu; fine for validating the link, slower under load); or
+(b) **build native** amd64 images from `~/archon` (`docker compose build gatekeeper keymaster
+hyperswarm-mediator`, which tags them `ghcr.io/archetech/*` so the topology compose finds them). Worth
+raising with macterra: publish multi-arch (arm64+amd64) images.
+
 ## 5. Two-machine setup — megaflax ↔ gamerflax (Tailscale)
 
 **Plan (Tailscale over Hyperswarm NAT traversal).** Rather than fight Hyperswarm's DHT NAT traversal
