@@ -42,6 +42,16 @@ propagates nothing .... /api/v1/registries -> ["local"]  (no hyperswarm registry
                         the shareDb/relayMsg propagation path has no process to run)
 ```
 
+**Coordination contract (Hearthold `DmzSession.assertPeerlessTarget`):** the DMZ profile's
+`/api/v1/registries` returning **exactly `["local"]`** IS the target-isolation signal Hearthold's
+`DmzSession.open` interrogates before importing — a mediator-less node can only anchor on non-propagating
+registries, so `["local"]` is a direct, grounded signal (not a heuristic; needs no new Aegis field).
+`docker-compose.dmz.yml` pins `ARCHON_GATEKEEPER_REGISTRIES=local` precisely to keep this true. Verified
+live across the topology: DMZ, node B, and node A all return `["local"]` (accepted as peerless); a SPHERE
+node returns `["local","hyperswarm"]` and is refused (`PeeredTargetError`). Any Aegis profile intended as a
+DMZ target MUST keep the registry set `["local"]` — adding `hyperswarm` (even with the mediator stopped)
+flips the signal to peered by design (fail-safe: refuse if propagation is *possible*, not just *live*).
+
 ## 2. DMZ lifecycle — ephemeral, destroyed on exit
 
 Disk-backed (no in-memory engine needed); state lives in **named volumes** so teardown provably removes
