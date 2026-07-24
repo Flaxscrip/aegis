@@ -26,3 +26,5 @@ aegis-offline-bundle/
 # Two-node validation: node B secrets + data
 deploy/two-node/nodeb.env
 data-nodeb/
+data-hh-issuer/
+data-hh-subject/
