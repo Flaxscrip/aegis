@@ -87,6 +87,24 @@ for a PRIVATE or SPHERE one — anyone who can reach the HTTP port resolves any 
 **Archon-core ask (macterra):** add an env flag to disable `/1.0/identifiers` (or L402-gate it) per-node,
 so a private/sphere node can keep an HTTP surface without the open resolver. Today it's network-layer only.
 
+### Sealing the admin WRITE surface — `docker-compose.sealed.yml` (deployment layer)
+
+The two-machine demo exposed a sharper hole than the read path: a raw `POST /api/v1/dids/import` (with a
+known/shared admin key) writes foreign ops straight into the node's own DB. Hearthold's `PrivateGatekeeper`
+type removes `importDIDs` — but that binds *Hearthold code*; the raw HTTP endpoint still sits below it, and
+a `curl` (or a malicious peer) reaches it. **`gatekeeper-guard.mjs` + `docker-compose.sealed.yml` shut it at
+the network edge**: the raw gatekeeper is unpublished (internal-only); a **resolution-only guard** takes the
+`:4324` port and returns **403** for `/dids/import`, `/events/process`, DID enumeration (`POST /dids/`), and
+bulk export (`/dids/export`, `/1.0/identifiers/<did>/data` — the content leak), while still forwarding the
+GET reads a peer's fallback needs (`/api/v1/did/<did>`, `/1.0/identifiers/<did>`). Verified live: import/admin
+→ 403 even *with* a valid admin key; gamerflax still resolves megaflax's DIDs through the guard.
+
+```bash
+# layer LAST; keep measure.yml as the first -f (project dir → deploy/topology, where the guard file sits):
+... -f docker-compose.measure.yml -f docker-compose.sphere-tailnet.yml -f docker-compose.sealed.yml up -d
+# GUARD_MODE=private (env) additionally blocks resolution — a node that serves no peer.
+```
+
 ## 4. Measurements — cost tracks gossip exposure, not existence
 
 Steady-state on megaflax (Docker Desktop, 7.6 GiB). Same node stack throughout; only the topic varies, so
