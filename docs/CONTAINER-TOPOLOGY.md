@@ -143,8 +143,32 @@ Steps (run on **each** machine):
    host (`netsh interface portproxy` or WSL2 mirrored networking) so the tailnet IP reaches it; publish
    Gatekeeper on the WSL2 interface, not `127.0.0.1`.
 
-**Status: prepared on megaflax; live run pending.** Tailscale is **not yet installed** on megaflax
-(installing it is a system-level change left to the operator), and gamerflax must be online. The megaflax
-side is otherwise ready — the SPHERE profile and the fallback wiring are the same ones validated on the
-single-host two-node harness (`deploy/two-node/`). *This section will be updated with "what actually ran"
-once both machines are on the tailnet.*
+### What actually ran (live, both machines)
+
+- **megaflax** — Apple Silicon macOS, tailnet `100.81.183.80`, `sphere-mega` node, gatekeeper published on
+  `:4324`, fallback → `http://100.100.83.52:4324`.
+- **gamerflax** — amd64 **Linux**, tailnet `100.100.83.52`, `sphere-gamer` node, gatekeeper `:4324`,
+  fallback → `http://100.81.183.80:4324`. Both on the shared `/aegis-sphere/…` topic (`registries=["local",
+  "hyperswarm"]`).
+
+**Bidirectional cross-node resolution over the tailnet — CONFIRMED live:**
+- gamerflax resolves megaflax's `alice` → its gatekeeper falls back to megaflax over the tailnet ✓
+- megaflax resolves a gamerflax DID → its gatekeeper falls back to gamerflax over the tailnet ✓
+
+The **fallback resolver over the tailnet is the reliable cross-node mechanism** (the same one proven on the
+single-host two-node harness); the shared hyperswarm topic is set for gossip but the fallback is what makes
+on-demand resolution deterministic. Each node stays its own isolated Gatekeeper — nothing bulk-syncs; a DID
+resolves across the pair only when looked up.
+
+**Setup notes from the actual run** (things that bit, so they're documented):
+- **Tailscale on macOS sandboxes Taildrop from the CLI** — couldn't push files host-to-host that way.
+- **The `ghcr.io/archetech/*` images are arm64-only.** gamerflax (amd64) either emulates
+  (`tonistiigi/binfmt --install arm64` + `docker-compose.emulate-arm64.yml`) or builds native from
+  `~/archon`. It ran under emulation here. → ask macterra for multi-arch images.
+- **GHCR auth**: the archetech images are private; the amd64 peer needs `docker login ghcr.io` (PAT with
+  `read:packages`) or a side-loaded image tarball.
+- **Fresh Docker on Linux**: add the user to the `docker` group; run compose **without** `sudo` so the
+  `ARCHON_*` env vars are honored.
+- Publish the gatekeeper on `0.0.0.0:4324` (reachable on `tailscale0`); a host firewall may need
+  `allow in on tailscale0 to any port 4324`. (WSL2 port-proxy note above applies only if the peer is
+  Windows; gamerflax was native Linux, so no translation layer was needed.)
