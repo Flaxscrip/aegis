@@ -11,9 +11,32 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 # --- Prereqs ---
 log "Checking OS"
 . /etc/os-release 2>/dev/null || die "cannot read /etc/os-release"
-[ "$ID" = "ubuntu" ] || die "Ubuntu required (found: $ID)"
-maj="${VERSION_ID%%.*}"
-[ "$maj" -ge 22 ] || die "Ubuntu 22.04+ required (found: $VERSION_ID)"
+
+# Accept Ubuntu and Ubuntu-based distros (Linux Mint, Pop!_OS, elementary, Zorin, KDE neon…) —
+# they share apt + the NodeSource repo. Match the "ubuntu" token in ID or ID_LIKE.
+case " $ID ${ID_LIKE:-} " in
+  *" ubuntu "*) : ;;
+  *) die "Ubuntu or an Ubuntu-based distro required (found: $ID)" ;;
+esac
+
+# Gate on the UNDERLYING Ubuntu release. On Ubuntu that's VERSION_ID; on derivatives (Mint etc.)
+# VERSION_ID is the derivative's own version, so read the Ubuntu base from UBUNTU_CODENAME.
+if [ "$ID" = "ubuntu" ]; then
+  ubu_maj="${VERSION_ID%%.*}"
+else
+  case "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}" in
+    focal)          ubu_maj=20 ;;
+    jammy)          ubu_maj=22 ;;
+    noble|oracular) ubu_maj=24 ;;
+    *)              ubu_maj="" ;;   # unknown/newer base — don't hard-fail our own machines
+  esac
+fi
+if [ -n "$ubu_maj" ]; then
+  [ "$ubu_maj" -ge 22 ] || die "Ubuntu 22.04+ base required (found: ${PRETTY_NAME:-$ID $VERSION_ID}, Ubuntu $ubu_maj base)"
+  log "OS: ${PRETTY_NAME:-$ID $VERSION_ID} (Ubuntu $ubu_maj base)"
+else
+  warn "Could not determine Ubuntu base for ${PRETTY_NAME:-$ID $VERSION_ID} (codename '${UBUNTU_CODENAME:-${VERSION_CODENAME:-?}}') — assuming 22.04+ and continuing"
+fi
 
 log "Checking sudo"
 sudo -n true 2>/dev/null || die "passwordless sudo required for the current user"
