@@ -25,6 +25,9 @@ aegis-offline-bundle/
 
 # Two-node validation: node B secrets + data
 deploy/two-node/nodeb.env
+
+# Sphere: gamerflax node's shared-topic secret (real copy; example is committed)
+deploy/topology/gamerflax.env
 data-nodeb/
 data-hh-issuer/
 data-hh-subject/
