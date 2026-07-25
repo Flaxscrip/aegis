@@ -34,6 +34,9 @@ services:
       - HEARTHOLD_DATA_ROOT=/data
       - HEARTHOLD_PASSPHRASE=${HEARTHOLD_PASSPHRASE:?set HEARTHOLD_PASSPHRASE}
       - HEARTHOLD_NODE_URL=${HEARTHOLD_NODE_URL:-http://drawbridge:4222}
+      # Isolated node: challenges/tokens must anchor on `local` — DEFAULT_REGISTRY is 'hyperswarm',
+      # which this node's local-only gatekeeper rejects (login/start would fail minting the challenge).
+      - HEARTHOLD_REGISTRY=${HEARTHOLD_REGISTRY:-local}
       - HEARTHOLD_OLLAMA_URL=${HEARTHOLD_OLLAMA_URL:-http://ollama:11434}
       - HEARTHOLD_CLASSIFIER_MODEL=${HEARTHOLD_CLASSIFIER_MODEL:-qwen2.5:3b}
     # daemon on loopback:4310  +  in-container forwarder lifting it to the container interface :4390
