@@ -1,0 +1,37 @@
+# Run the aegis secure mediator on a sphere node. Host-networked so it can bind the node's tailnet IP
+# (required for firewalled:false direct WireGuard connections) and reach the seed over the tailnet.
+#
+# It talks to the node's RAW gatekeeper + keymaster (NOT the guarded/published port — batch import is
+# admin-gated and the guard blocks it). Point SM_GATEKEEPER_URL/SM_KEYMASTER_URL at reachable raw ports
+# (e.g. the service's bridge IP, or a loopback-published port). See README.
+#
+# Per-node env (differs per machine):
+#   SM_NODE_NAME  SM_BIND(own tailnet IP)  SM_SEED(seed host:port)  SM_MEMBERS  SM_SHARE_DIDS
+name: aegis-secure-mediator
+
+services:
+  secure-mediator:
+    image: aegis-secure-mediator:latest
+    network_mode: host
+    environment:
+      SM_GATEKEEPER_URL: ${SM_GATEKEEPER_URL:?raw gatekeeper URL, e.g. http://172.x.x.x:4224}
+      SM_KEYMASTER_URL:  ${SM_KEYMASTER_URL:?keymaster URL, e.g. http://172.x.x.x:4226}
+      SM_ADMIN_KEY:      ${SM_ADMIN_KEY:?gatekeeper/keymaster admin key}
+      SM_NODE_NAME:      ${SM_NODE_NAME:?this node's keymaster id (signs the auth handshake)}
+      SM_PROTOCOL:       ${SM_PROTOCOL:?shared sphere protocol string}
+      SM_SEED:           ${SM_SEED:?seed host:port, e.g. 100.81.183.80:49737}
+      SM_BIND:           ${SM_BIND:?this node's tailnet IP}
+      SM_MEMBERS:        ${SM_MEMBERS:?comma-sep allowlist of member node DIDs}
+      SM_SHARE_DIDS:     ${SM_SHARE_DIDS:?comma-sep DIDs allowed to gossip}
+      SM_EXPORT_INTERVAL: ${SM_EXPORT_INTERVAL:-15}
+    restart: unless-stopped
+
+  # The stable seed (run on ONE node, e.g. megaflax). Bound to that node's tailnet IP.
+  #   docker compose -f docker-compose.secure-mediator.yml run --rm seed 49737 100.81.183.80
+  seed:
+    image: aegis-secure-mediator:latest
+    network_mode: host
+    entrypoint: ["node", "seed.mjs"]
+    command: ["49737", "${SM_BIND:?seed tailnet IP}"]
+    restart: unless-stopped
+    profiles: ["seed"]

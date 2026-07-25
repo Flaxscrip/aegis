@@ -1,0 +1,16 @@
+{
+  "name": "aegis-secure-mediator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A tailnet-scoped, member-authenticated, allowlist-gossiping hyperswarm mediator for Archon spheres. Uses Archon as-is via its public HTTP API (@didcid gatekeeper/keymaster) — no core changes.",
+  "scripts": {
+    "start": "node src/mediator.mjs",
+    "seed": "node seed.mjs"
+  },
+  "dependencies": {
+    "hyperswarm": "^4.17.0",
+    "hyperdht": "^6.33.0",
+    "b4a": "^1.6.7"
+  }
+}
