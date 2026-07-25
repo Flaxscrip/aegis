@@ -21,6 +21,9 @@ x-daemon-env: &daemon-env
   HEARTHOLD_DATA_ROOT: /data
   HEARTHOLD_PASSPHRASE: ${HEARTHOLD_PASSPHRASE:?set HEARTHOLD_PASSPHRASE}
   HEARTHOLD_NODE_URL: ${HEARTHOLD_NODE_URL:-http://drawbridge:4222}
+  # Isolated node: publish the IN-NETWORK DIDComm endpoint, not the advertised external/dummy host
+  # (sandbox.archon.local is non-resolving -> submission delivery 502s). Per AEGIS-HANDOFF.md.
+  HEARTHOLD_DIDCOMM_ENDPOINT: ${HEARTHOLD_DIDCOMM_ENDPOINT:-http://drawbridge:4222/didcomm}
   HEARTHOLD_CONTROL_HOST: "0.0.0.0"                          # bind the container interface (Hearthold 067af4c)
   HEARTHOLD_REGISTRY: ${HEARTHOLD_REGISTRY:-local}           # isolated node: challenge+response anchor on local
   HEARTHOLD_OLLAMA_URL: ${HEARTHOLD_OLLAMA_URL:-http://ollama:11434}

@@ -30,16 +30,24 @@ LOGGED-IN vault = 12   (SEALED 9, HIGH 2, LOW 1)
 A member who sits down at the Table now sees a full set. For gamerflax: same one-liner — set that node's
 `HEARTHOLD_SOVEREIGN_DID` to whoever's Signet logs in there.
 
-## The MEDIUM you asked for — still owed, here's the state
+## The MEDIUM you asked for — SEEDED ✓
 
-The 12 are `SEALED/HIGH/LOW`, **no MEDIUM** — they were seeded under the `quarantine` classifier
-(everything → SEALED) before the control overlay. The overlay's Warden now uses the **real Ollama
-classifier** (`qwen2.5:3b`, `aegis-ollama-1` is up), so a MEDIUM is achievable — but the only path that
-*stores* into the vault is the **Emissary submit** (`/api/classify` on the Warden only previews, doesn't
-store). And now that `config.sovereignDid = …6pqz6vb`, any new submit lands **owned by the Sovereign** →
-visible to the logged-in member. One caveat: the classifier is a live LLM on CPU, so each submit's
-classification takes ~20-40s.
+Done via the Emissary submit path (the only route that stores into the vault; `/api/classify` on the
+Warden only previews). The overlay's Warden classifies with the real Ollama model (`qwen2.5:3b`), and
+since `config.sovereignDid = …6pqz6vb`, every new submit lands **owned by the Sovereign**. Seeded three:
 
-**Next step (yours to greenlight):** I run one Emissary submit of content that classifies MEDIUM (I'll
-confirm the level with `/api/classify` first), owned by the Sovereign — giving the Table a live
-obsidian → step-up → face target. Say go and I'll seed it.
+| content | classified |
+|---|---|
+| "Dinner reservation for two at Bella's Trattoria Friday 7:30pm, under Morgan" | **MEDIUM (2)** ← your step-up target |
+| "Physiotherapy appointment … knee rehab" | HIGH (3) |
+| "Book club Wednesday 6pm at Sara's, chapter four" | LOW (1) |
+
+**Logged-in Table now: 15 artefacts — `SEALED 9, HIGH 3, LOW 2, MEDIUM 1`.** The MEDIUM is the live
+obsidian → step-up (CHALLENGE) → face target.
+
+### One infra fix this surfaced (folded into the overlay)
+The first submit `502`'d: the control-overlay Warden had re-published the advertised **external** DIDComm
+endpoint (`https://sandbox.archon.local/didcomm`, non-resolving) — the sharp edge from `AEGIS-HANDOFF.md`.
+Fixed by setting `HEARTHOLD_DIDCOMM_ENDPOINT=http://drawbridge:4222/didcomm` on the control daemons (now
+in the overlay), so the Warden publishes the in-network endpoint and submissions deliver. gamerflax's
+control overlay inherits both this and the `HEARTHOLD_SOVEREIGN_DID` requirement.
