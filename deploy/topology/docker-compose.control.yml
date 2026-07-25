@@ -1,0 +1,60 @@
+# Sevenfold Table control-plane overlay — run the Warden control daemon (:4310) on an isolated node
+# and expose it to the LOCAL browser at 127.0.0.1:4310, while the node stays internal:true (no egress).
+#
+# Answers AEGIS-ASK-table-on-isolated-node.md §1. The control plane is the SOVEREIGN'S OWN command API
+# (not a peer-facing read surface), so it binds LOOPBACK only — never the LAN/Tailnet. Cross-laptop
+# card-passing is DIDComm over aegis-peer, not this port.
+#
+# Requires: the `hearthold:sandbox` image + a member wallet dir (WARDEN_DATA_ROOT) + its passphrase.
+#   WARDEN_DATA_ROOT=/Users/you/hearthold/data HEARTHOLD_PASSPHRASE=… \
+#     docker compose -p sphere-mega -f docker-compose.control.yml up -d       # (layer on the node's stack)
+#
+# NOTE — one-line Hearthold simplification pending: `warden control` binds 127.0.0.1 inside the container
+# (control.ts logs http://127.0.0.1), so a sidecar can't reach it directly. Until Hearthold adds a
+# HEARTHOLD_CONTROL_HOST=0.0.0.0 bind env, we run an in-container tcp-forward to lift it onto the container
+# interface. When that env lands, delete `warden-fwd` and point the bridge straight at warden-console:4310.
+name: aegis-control
+
+networks:
+  default:
+    name: archon_default          # the isolated node network (internal:true); reaches drawbridge, ollama
+    external: true
+  console-lan:
+    driver: bridge                 # NON-internal leg — only the bridge sidecar joins it, only to publish the loopback port
+
+services:
+  # The Warden control daemon (+ DIDComm mailbox), on the isolated node. NO non-internal leg -> no egress.
+  warden-console:
+    image: hearthold:sandbox
+    networks: [default]
+    volumes:
+      - ${WARDEN_DATA_ROOT:?set WARDEN_DATA_ROOT to the member wallet dir}:/data
+      - ./tcp-forward.mjs:/g/tcp-forward.mjs:ro
+    environment:
+      - HEARTHOLD_DATA_ROOT=/data
+      - HEARTHOLD_PASSPHRASE=${HEARTHOLD_PASSPHRASE:?set HEARTHOLD_PASSPHRASE}
+      - HEARTHOLD_NODE_URL=${HEARTHOLD_NODE_URL:-http://drawbridge:4222}
+      - HEARTHOLD_OLLAMA_URL=${HEARTHOLD_OLLAMA_URL:-http://ollama:11434}
+      - HEARTHOLD_CLASSIFIER_MODEL=${HEARTHOLD_CLASSIFIER_MODEL:-qwen2.5:3b}
+    # daemon on loopback:4310  +  in-container forwarder lifting it to the container interface :4390
+    command:
+      - sh
+      - -c
+      - "node packages/warden/dist/index.js control 4310 & LISTEN=0.0.0.0:4390 TARGET=127.0.0.1:4310 node /g/tcp-forward.mjs & wait"
+    restart: unless-stopped
+
+  # Loopback bridge: publishes 127.0.0.1:4310 on the HOST -> warden-console:4390. This is the only thing
+  # with a non-internal leg (console-lan), and it only forwards — the Warden itself never gets egress.
+  warden-console-bridge:
+    image: node:22-alpine
+    networks: [default, console-lan]
+    volumes:
+      - ./tcp-forward.mjs:/g/tcp-forward.mjs:ro
+    environment:
+      - LISTEN=0.0.0.0:4310
+      - TARGET=warden-console:4390
+    command: ["node", "/g/tcp-forward.mjs"]
+    ports:
+      - "127.0.0.1:4310:4310"      # host loopback ONLY — the Sovereign's command plane never leaves the machine
+    depends_on: [warden-console]
+    restart: unless-stopped
