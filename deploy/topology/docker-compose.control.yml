@@ -25,6 +25,10 @@ x-daemon-env: &daemon-env
   HEARTHOLD_REGISTRY: ${HEARTHOLD_REGISTRY:-local}           # isolated node: challenge+response anchor on local
   HEARTHOLD_OLLAMA_URL: ${HEARTHOLD_OLLAMA_URL:-http://ollama:11434}
   HEARTHOLD_CLASSIFIER_MODEL: ${HEARTHOLD_CLASSIFIER_MODEL:-qwen2.5:3b}
+  # The node's Sovereign — the DID the member's Signet logs in as. The Warden serves THIS identity's
+  # vault; unowned artefacts belong to it. Without this the Warden defaults to its OWN DID, so a
+  # logged-in member sees an empty Table (Sevenfold AEGIS-NOTE-member-owns-no-artefacts.md).
+  HEARTHOLD_SOVEREIGN_DID: ${HEARTHOLD_SOVEREIGN_DID:?set to the node Sovereign DID the Signet logs in as}
 
 services:
   # WARDEN control daemon — the Table's command plane. No non-internal leg -> no egress.
