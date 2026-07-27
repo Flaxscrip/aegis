@@ -1,6 +1,7 @@
 # Sentinel — design capture
 
-**Status:** design, not yet built · **Owner:** Aegis (L6) · **Captured:** 2026-07-27
+**Status:** design (reviewed + green-lit by Hearthold, `HEARTHOLD-REPLY-sentinel.md`), not yet built ·
+**Owner:** Aegis (L6) · **Captured:** 2026-07-27
 **Purpose:** a security-posture auditor for an Aegis/Hearthold **deployment** — it *identifies and tests*
 whether a node/sphere is actually isolated and hardened as intended, on demand, and catches drift.
 
@@ -60,10 +61,10 @@ This is the shape of a clean report and the fixture Sentinel's own tests should 
 | # | Dimension | Method | Fail = |
 |---|---|---|---|
 | 1 | **Egress isolation** | active outbound (no-DNS to a public IP) + DNS probe from each PRIVATE/DMZ container → must fail; SPHERE nodes reported egress-capable (info, not fail) | a private container reaches the internet |
-| 2 | **Attack surface** | enumerate published ports; every non-loopback publish must be *justified*; control plane + Signet loopback-only; no raw admin port facing LAN/tailnet | an unjustified `0.0.0.0` publish / admin surface on LAN |
+| 2 | **Attack surface** (exploitability, not topology) | enumerate published ports; loopback-only → PASS. Published beyond loopback → **actively probe the guard** (verify-don't-assume, applied to L3): control plane → `Host: evil`→403, `Origin: https://evil`→403, unauth scoped read→401; gatekeeper → dim #3. Guard-proven ⇒ **WARN** (justified straddler); guard-absent ⇒ **CRITICAL**. **Signet = HARD loopback-only** (no guard substitutes for not exposing signing authority). | a published control/admin port with the guard absent |
 | 3 | **Guard / seal** (ask #3) | actively probe any published gatekeeper: `resolve 200 / enumerate 403 / import 403 / admin 403 / /data 403` | a published gatekeeper answers admin/import/enumerate |
 | 4 | **Straddler audit** | containers on internal+non-internal, **classified by the open leg's published ports** (loopback-only = OK, real egress / non-loopback = CRITICAL) | a straddler with real egress or a LAN publish |
-| 5 | **Registry & topic** (ask #1) | sovereign gatekeeper `registries=["local"]`; `ARCHON_PROTOCOL` is a **private random** topic, not `/ARCHON/v0.8-beta` and not a committed placeholder; **stock vs secure** mediator on a topic | private data on a public/shared topic; stock bulk-gossip mediator |
+| 5 | **Registry & topic** (ask #1) | **registry-FIRST** (registry defaults to `local`): gatekeeper `registries=["local"]` ⇒ **PASS**, topic is info-only — do *not* FAIL on a stale `ARCHON_PROTOCOL` a local-only node never uses. Only if a gossip registry (`hyperswarm`/chain) is present does the **topic check bite**: FAIL on `/ARCHON/v0.8-beta` or a committed placeholder, PASS on private-random. Plus **stock vs secure** mediator. | a gossip-enabled node on a public/shared topic; stock bulk-gossip mediator |
 | 6 | **Secrets & endpoints** | admin key set & not a sample/default (`measure-key`, sample.env values); passphrase set; published DIDComm endpoint in-network (not a non-resolving external dummy, not leaking a real host) | blank/sample secret; leaked or broken endpoint |
 
 **Optional / later:** non-pollution assertion (sovereign store is structurally local-only ⇒ un-pollutable;
@@ -131,10 +132,14 @@ Name it, don't hide it (ask #3):
 - **v0.2** — dimensions 5–6 (registry/topic, secrets/endpoints) + the L6 audit-table rows for Hearthold.
 - **v0.3** — `--json`, posture score, periodic/`--watch` mode (the drift catcher), Hearthold handoff block.
 
-## Open questions
+## Resolved (Hearthold review, `HEARTHOLD-REPLY-sentinel.md`, 2026-07-27)
 
-- Profile inference vs. an explicit `--profile` flag — how much to auto-detect (labels? network `internal`
-  flag? presence of a mediator?) before it gets brittle.
-- Periodic mode: a cron/systemd timer vs. a lightweight always-on watcher; where findings go (log? push?).
-- Multi-host: Sentinel is per-host; a sphere spans hosts. Do we aggregate (run per host, collate) or keep it
-  strictly local + one report per node?
+- **Profile:** `--profile` is **authoritative**; when unspecified, **default to the STRICTEST (PRIVATE)** —
+  an unlabeled node gets the harshest checks and can't hide egress (fail-closed). Auto-detect (labels /
+  `internal` flag / mediator presence) is a **cross-check only**: if inferred ≠ declared → **WARN**. Inference
+  never *relaxes* a check.
+- **Periodic mode:** a **systemd timer → JSON to a log** is enough; **push only on FAIL / new finding**.
+  Nice-to-have: emit a **signed, timestamped posture attestation** ("last verified clean at T; dims … PASS")
+  so the clean state is auditable + tamper-evident, not just absence-of-alert.
+- **Multi-host:** **per-host reports + a collated sphere verdict = AND of per-node verdicts** (one FAIL fails
+  the sphere). The per-node report stays primary; the collation is a thin roll-up.
