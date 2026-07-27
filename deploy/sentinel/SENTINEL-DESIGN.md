@@ -1,7 +1,8 @@
 # Sentinel — design capture
 
-**Status:** design (reviewed + green-lit by Hearthold, `HEARTHOLD-REPLY-sentinel.md`), not yet built ·
-**Owner:** Aegis (L6) · **Captured:** 2026-07-27
+**Status:** **v0.1 BUILT** (`sentinel.sh`, dims 1–4, validated live on megaflax: 23 PASS · 9 WARN · 0 FAIL);
+design reviewed + green-lit by Hearthold (`HEARTHOLD-REPLY-sentinel.md`) · **Owner:** Aegis (L6) ·
+**Captured:** 2026-07-27
 **Purpose:** a security-posture auditor for an Aegis/Hearthold **deployment** — it *identifies and tests*
 whether a node/sphere is actually isolated and hardened as intended, on demand, and catches drift.
 
@@ -127,8 +128,11 @@ Name it, don't hide it (ask #3):
 
 ## Build plan
 
-- **v0.1** — dimensions 1–4 (egress, attack surface, guard, straddler). All four probes already prototyped in
-  the 2026-07-27 recon. Runs live against megaflax (and gamerflax when up).
+- **v0.1** ✅ **BUILT** (`deploy/sentinel/sentinel.sh`) — dims 1–4; posture-aware sweep (infer per network,
+  strictest default) + `--network`/`--profile`; active egress/seal/control-guard probes; grouped report +
+  verdict + `--json` stub. Validated live on megaflax. **Refinement found in build:** unsealed-gatekeeper
+  severity is **reachability-scoped** — loopback-only ⇒ WARN (e.g. the DMZ import path), non-loopback ⇒
+  CRITICAL. (Same principle as dim #2's exploitability-not-topology.)
 - **v0.2** — dimensions 5–6 (registry/topic, secrets/endpoints) + the L6 audit-table rows for Hearthold.
 - **v0.3** — `--json`, posture score, periodic/`--watch` mode (the drift catcher), Hearthold handoff block.
 
