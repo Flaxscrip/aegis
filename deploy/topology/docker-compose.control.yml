@@ -12,7 +12,9 @@ name: aegis-control
 
 networks:
   default:
-    name: archon_default          # isolated node network (internal:true); reaches drawbridge, ollama
+    # Deliberate network name (Hearthold ask #2) — the node's ISOLATED (internal:true) network; reaches
+    # drawbridge, ollama. Defaults to archon_default; override per node. deploy/hearthold-up.sh enforces internal:true.
+    name: ${HEARTHOLD_DOCKER_NETWORK:-archon_default}
     external: true
   console-lan:
     driver: bridge                 # NON-internal; only the bridges join it, only to publish the loopback ports
