@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Sentinel v0.1 — Aegis L6 deployment/network posture auditor.
+# Sentinel v0.3 — Aegis L6 deployment/network posture auditor.
 # Read-only docker inspect + bounded active probes. NEVER mutates. Safe to run against a live node.
-# Design: deploy/sentinel/SENTINEL-DESIGN.md. Dims 1-4 (egress · attack surface · guard/seal · straddler).
+# Design: deploy/sentinel/SENTINEL-DESIGN.md. Dims 1-6 (egress · attack surface · guard/seal · straddler ·
+# registry/topic · secrets/endpoints). Terminal report, or --json / --attest for records & CI.
 #
 #   deploy/sentinel/sentinel.sh                         # sweep every network, infer profile per node
 #   deploy/sentinel/sentinel.sh --network archon_default --profile private
-#   deploy/sentinel/sentinel.sh --json                  # (stub in v0.1: verdict line only)
+#   deploy/sentinel/sentinel.sh --json                  # full structured findings (for the timer / audit table)
+#   SENTINEL_ATTEST_KEY=<key> deploy/sentinel/sentinel.sh --attest   # signed, timestamped posture attestation
 #
 # Profiles: private (must not egress) · dmz (must not egress) · sphere (egress expected, info) · control.
 # --profile is authoritative; unspecified single-node audit defaults to STRICTEST (private) and cross-checks
@@ -16,7 +18,13 @@ set -uo pipefail
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; B=$'\033[1m'; D=$'\033[2m'; X=$'\033[0m'
 else R=; G=; Y=; B=; D=; X=; fi
-nPASS=0; nWARN=0; nFAIL=0; worst=0   # worst severity seen among non-PASS: 1 med 2 high 3 crit
+nPASS=0; nWARN=0; nFAIL=0; worst=0    # worst severity among non-PASS: 1 med 2 high 3 crit
+cCRIT=0; cHIGH=0; cMED=0; cLOW=0      # severity counts (for JSON)
+SCOREDED=0                           # score deduction — FAILs weigh heavily, WARNs lightly
+JSON=0; ATTEST=0                      # output modes (set in arg parse; declared for `set -u`)
+CUR_NODE=""; CUR_DIM=""; declare -a FINDINGS=()
+sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum|cut -d' ' -f1; elif command -v shasum >/dev/null 2>&1; then shasum -a 256|cut -d' ' -f1; else openssl dgst -sha256|sed 's/.*= //'; fi; }
+json_escape(){ printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 sev_rank(){ case "$1" in info)echo 0;; medium)echo 1;; high)echo 2;; critical)echo 3;; *)echo 0;; esac; }
 # finding <PASS|WARN|FAIL> <sev> <msg> [evidence] [fix]
@@ -27,12 +35,22 @@ finding(){
     WARN) mark="⚠"; col="$Y"; nWARN=$((nWARN+1));;
     FAIL) mark="✗"; col="$R"; nFAIL=$((nFAIL+1));;
   esac
-  if [ "$v" != PASS ]; then local r; r=$(sev_rank "$sev"); [ "$r" -gt "$worst" ] && worst=$r; fi
+  if [ "$v" != PASS ]; then
+    local r; r=$(sev_rank "$sev"); [ "$r" -gt "$worst" ] && worst=$r
+    case "$sev" in critical) cCRIT=$((cCRIT+1));; high) cHIGH=$((cHIGH+1));; medium) cMED=$((cMED+1));; *) cLOW=$((cLOW+1));; esac
+    if [ "$v" = FAIL ]; then
+      case "$sev" in critical) SCOREDED=$((SCOREDED+40));; high) SCOREDED=$((SCOREDED+20));; medium) SCOREDED=$((SCOREDED+10));; *) SCOREDED=$((SCOREDED+5));; esac
+    else  # WARN — a thing to confirm, not a proven exposure: shave lightly
+      case "$sev" in high) SCOREDED=$((SCOREDED+4));; medium) SCOREDED=$((SCOREDED+1));; *) SCOREDED=$((SCOREDED+0));; esac
+    fi
+  fi
+  FINDINGS+=("$CUR_NODE"$'\037'"$CUR_DIM"$'\037'"$v"$'\037'"$sev"$'\037'"$msg")
+  { [ "$JSON" = 1 ] || [ "$ATTEST" = 1 ]; } && return
   printf "  %s%s %-4s%s %s[%s]%s %s\n" "$col" "$mark" "$v" "$X" "$D" "$sev" "$X" "$msg"
   [ -n "$ev" ]  && printf "        %s· %s%s\n" "$D" "$ev" "$X"
   [ -n "$fix" ] && printf "        %s→ %s%s\n" "$D" "$fix" "$X"
 }
-dim(){ printf "\n%s── %s ──%s\n" "$B" "$1" "$X"; }
+dim(){ CUR_DIM="$1"; { [ "$JSON" = 1 ] || [ "$ATTEST" = 1 ]; } && return; printf "\n%s── %s ──%s\n" "$B" "$1" "$X"; }
 
 # ---------- docker helpers (read-only) ----------
 net_internal(){ docker network inspect "$1" --format '{{.Internal}}' 2>/dev/null; }
@@ -71,12 +89,14 @@ infer_profile(){
 # ---------- the audit ----------
 audit_network(){
   local net="$1" prof="$2" inferred="$3"
-  local intl; intl=$(net_internal "$net")
-  printf "\n%s══════════════════════════════════════════════════════════════%s\n" "$B" "$X"
-  printf "%s NODE%s  network=%s%s%s  profile=%s%s%s%s\n" "$B" "$X" "$B" "$net" "$X" "$B" "$prof" "$X" \
-    "$([ "$inferred" = 1 ] && echo " ${D}(inferred)${X}")"
-  local members; members=$(containers_on_net "$net")
-  printf "  %smembers: %s%s\n" "$D" "$(echo $members | sed 's/ /, /g')" "$X"
+  CUR_NODE="$net"
+  local intl members; intl=$(net_internal "$net"); members=$(containers_on_net "$net")
+  if [ "$JSON" = 0 ] && [ "$ATTEST" = 0 ]; then
+    printf "\n%s══════════════════════════════════════════════════════════════%s\n" "$B" "$X"
+    printf "%s NODE%s  network=%s%s%s  profile=%s%s%s%s\n" "$B" "$X" "$B" "$net" "$X" "$B" "$prof" "$X" \
+      "$([ "$inferred" = 1 ] && echo " ${D}(inferred)${X}")"
+    printf "  %smembers: %s%s\n" "$D" "$(echo $members | sed 's/ /, /g')" "$X"
+  fi
 
   # cross-check inference vs declared
   if [ "$inferred" = 0 ]; then
@@ -247,38 +267,85 @@ audit_network(){
   fi
 }
 
+# ---------- output modes ----------
+emit_json(){
+  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"sentinel":"v0.3","host":"%s","timestamp":"%s","summary":{"pass":%d,"warn":%d,"fail":%d},"score":%d,"verdict":"%s","findings":[' \
+    "$(hostname)" "$ts" "$nPASS" "$nWARN" "$nFAIL" "$score" "$verdict"
+  local i=0 f node d v s m
+  for f in "${FINDINGS[@]:-}"; do
+    [ -z "$f" ] && continue
+    IFS=$'\037' read -r node d v s m <<<"$f"
+    [ "$i" -gt 0 ] && printf ','
+    printf '{"node":"%s","dim":"%s","verdict":"%s","severity":"%s","message":"%s"}' \
+      "$(json_escape "$node")" "$(json_escape "$d")" "$v" "$s" "$(json_escape "$m")"
+    i=$((i+1))
+  done
+  printf ']}\n'
+}
+# a signed, timestamped posture attestation — a tamper-evident record that the clean state was verified.
+emit_attestation(){
+  local ts digest att sig key
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  digest=$(printf '%s\n' "${FINDINGS[@]:-}" | sha256)
+  att=$(printf '{"host":"%s","timestamp":"%s","sentinel":"v0.3","verdict":"%s","score":%d,"summary":{"pass":%d,"warn":%d,"fail":%d},"findings_digest":"sha256:%s"}' \
+    "$(hostname)" "$ts" "$verdict" "$score" "$nPASS" "$nWARN" "$nFAIL" "$digest")
+  key="${SENTINEL_ATTEST_KEY:-}"
+  if [ -n "$key" ]; then
+    sig=$(printf '%s' "$att" | openssl dgst -sha256 -hmac "$key" 2>/dev/null | awk '{print $NF}')
+    printf '{"attestation":%s,"signature":{"alg":"HMAC-SHA256","value":"%s"}}\n' "$att" "$sig"
+  else
+    printf '{"attestation":%s,"signature":null,"note":"set SENTINEL_ATTEST_KEY for a tamper-evident HMAC signature"}\n' "$att"
+  fi
+}
+print_handoff(){
+  printf "\n%s── HANDOFF · what Sentinel (L6) does NOT cover ──%s\n" "$B" "$X"
+  printf "  %sA full posture = these L6 checks + Hearthold's L1–L5 review:%s\n" "$D" "$X"
+  printf "  %s· L1–L2 app/session — require-session, per-member scoping, step-up reveal, key custody (keys stay in the Signet)\n" "$D"
+  printf "  · L3 control — anti-DNS-rebinding, anti-CSRF, CORS allow-list on the control server\n"
+  printf "  · L4 read-gating — the unauth GET /did/:did residual (Archon's universal resolver, by design)\n"
+  printf "  · L5 config defaults — registry=local, control-host loopback%s\n" "$X"
+}
+
 # ---------- main ----------
-NETWORK=""; PROFILE=""; JSON=0
+NETWORK=""; PROFILE=""
 while [ $# -gt 0 ]; do case "$1" in
   --network) NETWORK="$2"; shift 2;;
   --profile) PROFILE="$2"; shift 2;;
-  --json) JSON=1; shift;;
+  --json)    JSON=1; shift;;
+  --attest)  ATTEST=1; shift;;
   -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
   *) echo "unknown arg: $1" >&2; exit 2;;
 esac; done
 
-printf "%s════════════════════════════════════════════════════════════════%s\n" "$B" "$X"
-printf "%s SENTINEL v0.1 — Aegis L6 posture audit%s   %s%s%s\n" "$B" "$X" "$D" "$(hostname)" "$X"
-printf "%s════════════════════════════════════════════════════════════════%s\n" "$B" "$X"
+if [ "$JSON" = 0 ] && [ "$ATTEST" = 0 ]; then
+  printf "%s════════════════════════════════════════════════════════════════%s\n" "$B" "$X"
+  printf "%s SENTINEL v0.3 — Aegis L6 posture audit%s   %s%s%s\n" "$B" "$X" "$D" "$(hostname)" "$X"
+  printf "%s════════════════════════════════════════════════════════════════%s\n" "$B" "$X"
+fi
 
 if [ -n "$NETWORK" ]; then
-  prof="${PROFILE:-private}"; inferred=0; [ -z "$PROFILE" ] && inferred=0
-  audit_network "$NETWORK" "$prof" "$([ -z "$PROFILE" ] && echo 1 || echo 0)"
+  audit_network "$NETWORK" "${PROFILE:-private}" "$([ -z "$PROFILE" ] && echo 1 || echo 0)"
 else
-  # sweep every non-builtin network, infer profile per node
   for net in $(docker network ls --format '{{.Name}}' | grep -vE '^(bridge|host|none)$'); do
-    [ -z "$(containers_on_net "$net")" ] && continue   # skip empty networks
-    prof="${PROFILE:-$(infer_profile "$net")}"
-    audit_network "$net" "$prof" "$([ -z "$PROFILE" ] && echo 1 || echo 0)"
+    [ -z "$(containers_on_net "$net")" ] && continue
+    audit_network "$net" "${PROFILE:-$(infer_profile "$net")}" "$([ -z "$PROFILE" ] && echo 1 || echo 0)"
   done
 fi
 
-# ---------- verdict ----------
-printf "\n%s════ VERDICT ════%s\n" "$B" "$X"
+# ---------- verdict + score ----------
 verdict="OK"; vc="$G"
 [ "$nWARN" -gt 0 ] && { verdict="REVIEW"; vc="$Y"; }
-[ "$worst" -ge 2 ] && { verdict="AT RISK"; vc="$R"; }   # a high/critical non-PASS
+[ "$worst" -ge 2 ] && { verdict="AT RISK"; vc="$R"; }
 [ "$nFAIL" -gt 0 ] && [ "$worst" -ge 3 ] && { verdict="CRITICAL"; vc="$R"; }
-printf "  %d PASS · %d WARN · %d FAIL   →  POSTURE: %s%s%s\n" "$nPASS" "$nWARN" "$nFAIL" "$vc" "$verdict" "$X"
-[ "$JSON" = 1 ] && printf '{"pass":%d,"warn":%d,"fail":%d,"verdict":"%s"}\n' "$nPASS" "$nWARN" "$nFAIL" "$verdict"
+score=$((100 - SCOREDED)); [ "$score" -lt 0 ] && score=0
+
+if   [ "$JSON" = 1 ];   then emit_json
+elif [ "$ATTEST" = 1 ]; then emit_attestation
+else
+  printf "\n%s════ VERDICT ════%s\n" "$B" "$X"
+  printf "  %d PASS · %d WARN · %d FAIL   ·  score %s%d/100%s   →  POSTURE: %s%s%s\n" \
+    "$nPASS" "$nWARN" "$nFAIL" "$B" "$score" "$X" "$vc" "$verdict" "$X"
+  print_handoff
+fi
 [ "$nFAIL" = 0 ]

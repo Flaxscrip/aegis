@@ -1,0 +1,21 @@
+# Sentinel — periodic L6 posture audit (one-shot; JSON appended to a log). Pairs with sentinel.timer.
+# Install (edit WorkingDirectory + User for your node), then:
+#   sudo cp sentinel.{service,timer} /etc/systemd/system/
+#   sudo mkdir -p /var/log/sentinel && sudo systemctl enable --now sentinel.timer
+#
+# The audit exits NON-ZERO when it finds a FAIL, so systemd marks the run failed — wire OnFailure= to a
+# notifier unit for "push only on FAIL". Optionally emit a signed attestation on clean runs (see below).
+[Unit]
+Description=Sentinel — Aegis L6 posture audit (JSON to log)
+After=docker.service
+Wants=docker.service
+# OnFailure=sentinel-alert@%n.service    # <- your notifier; fires only when a FAIL is found
+
+[Service]
+Type=oneshot
+User=aegis                               # a user in the docker group
+WorkingDirectory=/home/aegis/research/aegis
+# Append structured findings; keep an error log. Rotate /var/log/sentinel/ with logrotate.
+ExecStart=/bin/sh -c 'deploy/sentinel/sentinel.sh --json >> /var/log/sentinel/posture.jsonl 2>> /var/log/sentinel/sentinel.err'
+# Tamper-evident clean-state record (needs SENTINEL_ATTEST_KEY in the environment or an EnvironmentFile):
+# ExecStartPost=/bin/sh -c 'deploy/sentinel/sentinel.sh --attest >> /var/log/sentinel/attestations.jsonl'

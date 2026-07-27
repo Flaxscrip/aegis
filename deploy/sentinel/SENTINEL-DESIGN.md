@@ -1,7 +1,8 @@
 # Sentinel — design capture
 
-**Status:** **v0.2 BUILT** (`sentinel.sh`, dims 1–6, validated live on megaflax: 35 PASS · 27 WARN · 0 FAIL);
-L6 audit rows delivered (`AEGIS-L6-AUDIT-ROWS.md`); design reviewed + green-lit by Hearthold
+**Status:** **v0.3 BUILT** (`sentinel.sh` dims 1–6 + `--json`/`--attest`/score, `sentinel-sphere.sh`
+collator, systemd timer/service; validated live on megaflax: 35 PASS · 27 WARN · 0 FAIL, score 61/100);
+L6 audit rows delivered (`AEGIS-L6-AUDIT-ROWS.md`); design green-lit by Hearthold
 (`HEARTHOLD-REPLY-sentinel.md`) · **Owner:** Aegis (L6) · **Captured:** 2026-07-27
 **Purpose:** a security-posture auditor for an Aegis/Hearthold **deployment** — it *identifies and tests*
 whether a node/sphere is actually isolated and hardened as intended, on demand, and catches drift.
@@ -136,7 +137,10 @@ Name it, don't hide it (ask #3):
 - **v0.2** ✅ **BUILT** — dims 5 (registry-FIRST topic check) & 6 (secrets/endpoints); reachability-scoped
   severity extended to the admin-key check (blank on loopback = WARN, on LAN = CRITICAL); stock-mediator
   severity scaled by topic privacy. L6 audit rows delivered (`AEGIS-L6-AUDIT-ROWS.md`).
-- **v0.3** — `--json`, posture score, periodic/`--watch` mode (the drift catcher), Hearthold handoff block.
+- **v0.3** ✅ **BUILT** — `--json` (structured findings) + FAIL-weighted **posture score**; `--attest` (signed
+  HMAC posture attestation, verified tamper-evident); Hearthold **handoff block** (L1–L5 not-covered);
+  `sentinel.timer`/`.service` (periodic drift catcher; exits non-zero on FAIL → `OnFailure=` alert);
+  `sentinel-sphere.sh` (multi-host **worst-verdict** roll-up).
 
 ## Resolved (Hearthold review, `HEARTHOLD-REPLY-sentinel.md`, 2026-07-27)
 

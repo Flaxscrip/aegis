@@ -1,0 +1,12 @@
+# Run the Sentinel posture audit hourly (and 5 min after boot). Catches drift a startup check can't —
+# a port opened, internal:true relaxed, a bridge added — between runs.
+[Unit]
+Description=Run Sentinel L6 posture audit periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
