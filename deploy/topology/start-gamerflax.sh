@@ -70,12 +70,23 @@ case "$cmd" in
   *) echo "usage: start-gamerflax.sh [up|down|status]" >&2; exit 2 ;;
 esac
 
-# --- amd64: ensure qemu arm64 emulation is registered (idempotent) -------------------------------
+# --- emulation vs native --------------------------------------------------------------------------
 if [[ "$EMULATE" == "1" ]]; then
+  # ensure qemu arm64 emulation is registered (idempotent)
   if ! docker run --rm --platform linux/arm64 alpine:3.20 true >/dev/null 2>&1; then
     echo "Registering qemu arm64 emulation (one-time)…"
     docker run --privileged --rm tonistiigi/binfmt --install arm64
   fi
+else
+  # NATIVE mode — no qemu. Guard: warn if the archon images are still arm64 (they'd fail to run direct).
+  HOST_ARCH=$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo '?')
+  for i in gatekeeper-typescript keymaster hyperswarm-mediator; do
+    a=$(docker image inspect "ghcr.io/archetech/$i:latest" --format '{{.Architecture}}' 2>/dev/null || echo missing)
+    if [ "$a" != "$HOST_ARCH" ]; then
+      echo "WARNING: ghcr.io/archetech/$i is '$a', not native '$HOST_ARCH' — run deploy/topology/build-native.sh" >&2
+      echo "         first, or set EMULATE=1. Continuing, but this image may fail without emulation." >&2
+    fi
+  done
 fi
 
 # --- bring it up ---------------------------------------------------------------------------------
