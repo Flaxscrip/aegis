@@ -31,3 +31,6 @@ deploy/topology/gamerflax.env
 data-nodeb/
 data-hh-issuer/
 data-hh-subject/
+
+# Runtime tor hidden-service keys/hostname (created by the drawbridge/tor service)
+data/tor-*/
