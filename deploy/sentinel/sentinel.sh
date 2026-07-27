@@ -42,8 +42,14 @@ has_node(){ docker exec "$1" sh -c 'command -v node' >/dev/null 2>&1; }
 # published host bindings for a container: lines like "127.0.0.1:4310" or "0.0.0.0:4324"
 pub_binds(){ docker inspect "$1" --format '{{range $p,$b := .NetworkSettings.Ports}}{{range $b}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' 2>/dev/null; }
 is_loopback(){ case "$1" in 127.0.0.1:*|::1:*) return 0;; *) return 1;; esac; }
+pub_nonloopback(){ local b; for b in $(pub_binds "$1"); do is_loopback "$b" || { echo yes; return; }; done; echo no; }
 hostport(){ echo "${1##*:}"; }   # 0.0.0.0:4324 -> 4324
 code(){ curl -s -o /dev/null -w '%{http_code}' --max-time 6 "$@" 2>/dev/null; }
+cenv(){ docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep "^$2=" | head -1 | cut -d= -f2-; }
+cimg(){ docker inspect "$1" --format '{{.Config.Image}}' 2>/dev/null; }
+# member_like <net> <glob> [exclude-glob] — first running member of net matching glob (skipping exclude)
+member_like(){ local net="$1" pat="$2" exc="${3:-__none__}" c; for c in $(containers_on_net "$net"); do
+  case "$c" in $exc) continue;; esac; case "$c" in $pat) echo "$c"; return 0;; esac; done; return 1; }
 
 # egress probe from a network: try a node-capable member, then a throwaway alpine on that net.
 egress_probe(){
@@ -169,6 +175,76 @@ audit_network(){
     done
   done
   [ "$any_pub" = 0 ] && finding PASS info "no published ports on this node's containers"
+
+  # ---- DIM 5 · Registry & topic (REGISTRY-FIRST — Hearthold refinement #1) ----
+  dim "DIM 5 · Registry & topic"
+  local gk; gk=$(member_like "$net" '*gatekeeper*' '*guard*') || gk=""
+  if [ -z "$gk" ]; then
+    finding PASS info "no gatekeeper on this node — n/a"
+  else
+    local regs; regs=$(cenv "$gk" ARCHON_GATEKEEPER_REGISTRIES)
+    if [ "$regs" = "local" ] || [ -z "$regs" ]; then
+      finding PASS high "registry is local-only ($gk: '${regs:-local}') — cannot gossip; topic is moot"
+    else
+      finding WARN medium "gatekeeper exposes a gossip registry ('$regs') — topic privacy now matters" "$gk"
+      local med; med=$(member_like "$net" '*mediator*') || med=""
+      if [ -z "$med" ]; then
+        finding WARN medium "gossip registry configured but no mediator running — gossip inactive (drift risk if one starts)"
+      else
+        local topic img tpriv=0; topic=$(cenv "$med" ARCHON_PROTOCOL); img=$(cimg "$med")
+        case "$topic" in
+          */ARCHON/v0.8-beta) finding FAIL critical "on the PUBLIC default topic /ARCHON/v0.8-beta — private DIDs would propagate publicly" "$med" "set ARCHON_PROTOCOL to a private random topic (setup-node.sh)";;
+          ""|*REPLACE*|*'<'*) finding FAIL high "placeholder/empty topic ('$topic') — never gossip on an un-minted topic" "$med" "mint /aegis-private/\$(openssl rand -hex 32)";;
+          /aegis-private/*|/aegis-sphere/*) tpriv=1; finding PASS high "private topic ($topic, len ${#topic})";;
+          *) finding WARN medium "non-default topic '$topic' — confirm it's private-random, not shared/guessable";;
+        esac
+        case "$img" in
+          *secure-mediator*)     finding PASS high "secure mediator ($img) — peer-auth + scoped gossip";;
+          *hyperswarm-mediator*)
+            if [ "$tpriv" = 1 ]; then finding WARN medium "STOCK mediator on a private topic — exposure bounded to topic-knowers, but no peer-auth/scoping (a non-member who learns the topic can join/inject)" "$img" "swap to aegis-secure-mediator"
+            else finding WARN high "STOCK mediator on a non-private topic — bulk-gossips the DID set with no auth" "$img" "swap to aegis-secure-mediator"; fi;;
+          *) finding WARN info "mediator image '$img' unrecognized — confirm gossip scope/auth";;
+        esac
+      fi
+    fi
+  fi
+
+  # ---- DIM 6 · Secrets & endpoints ----
+  dim "DIM 6 · Secrets & endpoints"
+  local sec; sec=$(member_like "$net" '*gatekeeper*' '*guard*') || sec=$(member_like "$net" '*keymaster*') || sec=""
+  if [ -z "$sec" ]; then
+    finding PASS info "no gatekeeper/keymaster on this node — n/a"
+  else
+    local key; key=$(cenv "$sec" ARCHON_ADMIN_API_KEY)
+    case "$key" in
+      "") if [ "$(pub_nonloopback "$sec")" = yes ]; then
+            finding FAIL critical "admin API key BLANK on a LAN-published gatekeeper ($sec) — admin routes open to the network" "" "set ARCHON_ADMIN_API_KEY=\$(openssl rand -hex 32)"
+          else
+            finding WARN high "admin API key BLANK ($sec) — admin routes unprotected (loopback/in-network only; defense-in-depth gap)" "" "set ARCHON_ADMIN_API_KEY even for internal/ephemeral nodes"
+          fi;;
+      measure-key|changeme|admin|test|password|secret|sample|key) finding WARN high "admin key is a weak/sample value ('$key')" "$sec" "regenerate a unique key";;
+      *) if [ "${#key}" -lt 32 ]; then finding WARN medium "admin key is short (${#key} chars) — prefer 64-hex"; else finding PASS medium "admin key set (${#key} chars)"; fi;;
+    esac
+    local km pp; km=$(member_like "$net" '*keymaster*') || km="$sec"
+    pp=$(cenv "$km" ARCHON_ENCRYPTED_PASSPHRASE)
+    [ -z "$pp" ] && { local wd; wd=$(member_like "$net" '*warden*' '*bridge*') && pp=$(cenv "$wd" HEARTHOLD_PASSPHRASE); }
+    case "$pp" in
+      "") finding WARN medium "wallet passphrase not found in env here (may be set elsewhere) — confirm it's not blank";;
+      measure-pp|changeme|password|sample) finding WARN medium "wallet passphrase is a sample value ('$pp')";;
+      *) finding PASS medium "wallet passphrase set";;
+    esac
+  fi
+  local db; db=$(member_like "$net" '*drawbridge*') || db=""
+  if [ -n "$db" ]; then
+    local host; host=$(cenv "$db" ARCHON_DRAWBRIDGE_PUBLIC_HOST)
+    case "$host" in
+      "") finding PASS info "no advertised external DIDComm host (in-network default)";;
+      http://drawbridge*|http://*:4222*) finding PASS info "in-network DIDComm host ($host)";;
+      *.local*|*.internal*|*sandbox*) finding WARN medium "advertises a non-resolving host ($host) — DIDComm delivery can 502 unless HEARTHOLD_DIDCOMM_ENDPOINT overrides in-network" "$db";;
+      http://*|https://*) finding WARN medium "advertises an external host ($host) — on an isolated node confirm this isn't a leak/misconfig" "$db";;
+      *) finding WARN info "DIDComm host '$host' — unrecognized form";;
+    esac
+  fi
 }
 
 # ---------- main ----------
