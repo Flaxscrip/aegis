@@ -8,7 +8,8 @@
 #
 # It reads deploy/topology/gamerflax.env for the ONE thing you can't hardcode — the shared sphere
 # topic (ARCHON_PROTOCOL) — then assembles the exact overlay stack from CONTAINER-TOPOLOGY.md §5:
-#   measure.yml (full node) + sphere-tailnet.yml (publish :4324 + peer fallback) + emulate-arm64.yml.
+#   measure.yml (full node) + sphere-tailnet.yml (peer fallback) + sealed.yml (guard publishes :4324,
+#   never the raw gatekeeper) + emulate-arm64.yml.
 set -euo pipefail
 
 # --- locate the repo + files regardless of cwd ---------------------------------------------------
@@ -41,8 +42,11 @@ case "$ARCHON_PROTOCOL" in
 esac
 
 # --- assemble the compose file stack -------------------------------------------------------------
+# sealed.yml is ALWAYS included: the tailnet :4324 is published only through the resolution-only guard,
+# never the raw gatekeeper (Hearthold ask #3 — seal by construction, not a remembered overlay).
 FILES=(-f deploy/topology/docker-compose.measure.yml
-       -f deploy/topology/docker-compose.sphere-tailnet.yml)
+       -f deploy/topology/docker-compose.sphere-tailnet.yml
+       -f deploy/topology/docker-compose.sealed.yml)
 if [[ "$EMULATE" == "1" ]]; then
   FILES+=(-f deploy/topology/docker-compose.emulate-arm64.yml)
 fi
