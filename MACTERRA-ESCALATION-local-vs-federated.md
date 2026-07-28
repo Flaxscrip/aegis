@@ -1,74 +1,67 @@
-# Escalation to macterra: the `local` ↔ `hyperswarm` seam has several core gaps
+# Escalation to macterra: make `local`-first identities cleanly promotable to `hyperswarm`/spheres
 
 **From:** Aegis (+ Sevenfold, + Hearthold) · **To:** macterra / Morningstar · **Date:** 2026-07-28
+**Status:** revised after independent source validation — one earlier claim was ours (a misread), corrected below.
 
-We've been standing up **egress-isolated Hearthold/Archon nodes** and federating two of them (two laptops over
-Tailscale) for a real cross-node card-pass. Along the way we kept hitting the same underlying thing from
-different angles: **`local` DIDs are isolated but can't do half of Archon's features, and moving to `hyperswarm`
-— the only other option — is broken in several specific spots.** We've built workarounds (one worth keeping),
-but we'd rather fix the core than keep patching. Every item below is reproduced live; file refs are to
-`~/archon` / `@didcid/keymaster` / `@hearthold/core`.
+## The product we're building toward
+A Sovereign should be able to run **`local`-first** (fully isolated, no gossip) and later **promote** their
+identity/documents into a `hyperswarm` **sphere** (family/corporate) when they choose. `local` is a *feature* we
+want — the issue is that the `local → hyperswarm` path has real gaps. Everything below is reproduced against
+`~/archon`; file refs included. We independently re-verified each before sending.
 
-## The core gaps (each reproduced)
+## What we RETRACT (was our misread, not a core bug)
+We previously flagged "the embedded `createId` forces a `local` create op even with explicit + default =
+hyperswarm." **That is wrong.** `gatekeeper.ts:590` stamps every stored event's **top-level** `registry: 'local'`
+by design (it's the local-DB storage marker); the DID's real registry lives in
+`operation.registration.registry`, which `createIdOperation` (`keymaster.ts:1636`, `const {registry =
+this.defaultRegistry} = options`) sets correctly and `queueOperation` distributes on. Verified end-to-end: an
+`@hearthold/core` `ensureIdentity` mint with `HEARTHOLD_REGISTRY=hyperswarm` produces
+`operation.registration.registry = hyperswarm` and **exports/gossips fine.** We'd been reading the wrong field
+(`export-did` surfaces the top-level `local`). No bug here — but a sharp **observability trap**: tooling that
+shows a DID's "registry" as the event's `local` marker will mislead everyone. A surfaced *effective* registry
+(the create op's) would prevent this.
 
-1. **`local` identities are barred from authoring ephemeral docs.** `ephemeralRegistry` is hardcoded to
-   `hyperswarm` (`keymaster.ts:230`), and `gatekeeper.ts:462` throws `non-local registry=hyperswarm` for a
-   `local` identity. So a `local` Sovereign silently **cannot** create challenges/responses, credential-request
-   notices, polls/ballots, or dmail — five feature families. (Detail: our `SANDBOX-PROFILE.md §6`.) Net: a truly
-   isolated single-node deployment can't run credential accept. That pushes every real node onto `hyperswarm`.
+## The REAL gaps
 
-2. **`createId({registry:'hyperswarm'})` on the embedded keymaster still writes a `local` create op.** Proven
-   by Sevenfold with *everything* set to hyperswarm: `config.ts:116` (`config.registry = hyperswarm`),
-   `keymaster.ts:54` (embedded keymaster `defaultRegistry = config.registry = hyperswarm`), `identity.ts:33`
-   (`createId(name, {registry: config.registry})` → explicit hyperswarm) — and `export-did` still shows
-   **create registry: local**. Explicit option AND process default both ignored. The **direct keymaster-service
-   `POST /api/v1/ids {options:{registry:hyperswarm}}` does NOT have this** (it anchors hyperswarm on the same
-   gatekeeper). So the bug is isolated to the **embedded/library create path forcing `local`.** This is the one
-   that blocks us right now — a Sovereign minted through Hearthold can't be made gossip-eligible at all.
+1. **`local` identities can't author ephemeral / credential docs — so no VCs, challenges, dmail, polls on a
+   fully-`local` node.** `ephemeralRegistry` is hardcoded `'hyperswarm'` (`keymaster.ts:209`, used at
+   `:3415/:3631`), and `gatekeeper.ts:462` enforces controller-vs-asset consistency: a `local`-registered
+   identity may not author a non-`local` operation. So the ephemeral doc (always hyperswarm) is refused for a
+   `local` controller. Net: a truly isolated single-node Sovereign **cannot issue/accept a credential.** This is
+   the core tension — `local` is only half a citizen. Options we'd love your take on: let `ephemeralRegistry`
+   follow the identity's registry; or permit ephemeral (short-lived, `validUntil`) assets under a `local`
+   controller; or a first-class "promote this identity" op.
 
-3. **`change-registry` doesn't make an existing `local` DID gossipable.** `exportBatch` keys gossip-eligibility
-   on the **create op's** registry (`gatekeeper.ts:1383`: `events[0].operation.registration.registry !== 'local'`).
-   `change-registry` appends a later op but never rewrites `events[0]`, so a `local`-created DID stays
-   un-gossipable forever. Migration `local → hyperswarm` is **create-only in practice.** A re-anchor or
-   re-export path would fix it.
+2. **`change-registry` doesn't actually make a `local`-created DID gossipable — promotion is create-only in
+   practice.** `exportBatch` keys gossip-eligibility on the **create op's** registry
+   (`gatekeeper.ts:1383`: `events[0].operation.registration.registry !== 'local'`). `change-registry` appends a
+   later op but never rewrites `events[0]`, so a `local`-created DID stays un-gossipable forever (verified: a
+   change-registry'd Sovereign exports 0 ops; a hyperswarm-*created* one exports its op). For "local-first,
+   promote later" to work, `change-registry` needs to re-anchor (or a re-export path is needed).
 
-4. **The peer fallback resolver is confirmed-only, so cross-node nodes can't see each other's updates.**
-   `resolveFromUniversalResolver` / `/1.0/identifiers` (`confirm-fallback.ts`) return only the confirmed doc; on
-   `hyperswarm` without a mediator, a post-create **update stays unconfirmed** (create auto-confirms, updates
-   don't). So node A resolving node B's Sovereign gets the base doc with **no keyAgreement** → can't authcrypt →
-   cross-node DIDComm / credential-accept fails. (This is the gap our secure mediator's confirm-on-import works
-   around — see below.)
+3. **The peer fallback resolver is confirmed-only, so two isolated `hyperswarm` nodes can't see each other's
+   post-create updates.** `/1.0/identifiers` / `confirm-fallback.ts` return only the confirmed doc; on
+   `hyperswarm` without a mediator a create auto-confirms but an **update stays unconfirmed**. So node A resolving
+   node B's Sovereign sees the base doc with **no keyAgreement** → can't authcrypt → cross-node DIDComm fails.
+   (We work around this — see the mediator.)
 
-5. *(minor)* The Drawbridge front doesn't proxy `POST /api/v1/events/process` (404), so `processEvents` after a
-   write can't go through the same node URL — forced us to inject admin via a side proxy.
+4. *(minor)* The Drawbridge front doesn't proxy `POST /api/v1/events/process` (404), so a post-write
+   `processEvents` can't traverse the same node URL; forced an admin side-proxy.
 
-## What we built that's worth keeping — `aegis-secure-mediator` (propose upstream?)
-The stock `hyperswarm-mediator` (`new Hyperswarm()`, public DHT + UDP holepunch) **can't traverse two different
-NATs** (proven megaflax↔gamerflax: `Connected nodes: 0`), churns its swarm every 60s while unconnected, and
-gossips `getDIDs()` = the whole node to anyone who knows the topic. Our drop-in (`deploy/secure-mediator/`, uses
-the public `@didcid/*` HTTP API, no core changes) adds four properties and is **proven live** (two laptops,
-`AUTH OK`, a keyAgreement update crossing and becoming resolvable):
-1. **Tailnet transport** — private `hyperdht` (seed + `firewalled:false` + bind) → direct over WireGuard, no
-   public DHT/holepunch, stable.
-2. **Peer auth** — a peer joins only by proving an allowlisted member node DID (challenge → `/keys/sign` →
-   `/keys/verify` + allowlist + fresh nonce).
-3. **Scoped gossip** — only an allowlisted DID set crosses (not the whole node).
-4. **Confirm-on-import** — `processEvents` after `batch/import`, so a synced update actually lands (works around
-   gap #4). Would love your view on whether this belongs in core / the stock mediator.
+## What we built worth keeping — `aegis-secure-mediator` (propose upstream?)
+The stock `hyperswarm-mediator` can't traverse two NATs (proven megaflax↔gamerflax: `Connected nodes: 0`),
+churns every 60s, and gossips the whole node to anyone on the topic. Our drop-in (public `@didcid/*` HTTP API,
+no core changes; **proven live** — two laptops, `AUTH OK`, a keyAgreement update crossing and becoming
+resolvable) adds: **tailnet transport** (private `hyperdht`, direct over WireGuard), **peer auth** (allowlisted
+member node DID via `/keys/sign`+`/keys/verify`), **scoped gossip** (only an allowlisted DID set crosses), and
+**confirm-on-import** (`processEvents` after `batch/import` — works around gap #3). Worth upstreaming?
 
-## Temporary workarounds we want to retire (they exist only because of the gaps above)
-- **Direct keymaster-service pre-mint** of the Sovereign (dodges gap #2). Retire when #2 is fixed.
-- **Admin-injecting node proxy** (`nodeurl-proxy.mjs`) for `processEvents` writes (gap #5).
-- **`confirm-on-import`** as a substitute for real cross-node update propagation (gap #4) — arguably it becomes
-  a legit mediator feature; your call.
-- socat loopback forwarders (deployment plumbing for `internal:true` nets + macOS Docker; keep as a pattern).
+## Asks (in priority)
+- **#1** — the local-can't-author-ephemeral invariant is what makes `local` "half a citizen." A way to VC/accept
+  under `local` (or a clean promote op) is the single biggest unblock for isolated-Sovereign product.
+- **#2** — `change-registry` should re-anchor for gossip, so "local-first, promote later" actually works.
+- **#3** — cross-node visibility of unconfirmed updates (or bless mediator confirm-on-import as the path).
+- The **observability trap** (surface the effective/create-op registry, not the event's `local` marker).
+- Whether the **secure-mediator** belongs upstream.
 
-## Asks
-- **#2 first** (it's blocking): why does the embedded `createId` force `local` when both explicit and default are
-  `hyperswarm`, while the service API doesn't? That's the immediate unblock for federated Hearthold.
-- Then **#1, #3, #4** — collectively they'd let a node be *isolated by default and federate cleanly when it
-  chooses*, which is exactly the product we're building toward (a one-command isolated Sovereign that can join a
-  family/corporate sphere).
-- And whether the **secure-mediator** properties belong upstream.
-
-Happy to demo any of these live on the two-laptop rig.
+Happy to demo any of it live on the two-laptop rig.
