@@ -1,12 +1,16 @@
-// aegis-secure-mediator — a hardened hyperswarm mediator for Archon spheres.
+// aegis-secure-mediator (v0.2) — a hardened hyperswarm mediator for Archon spheres.
 //
-// Three properties the stock mediator lacks:
+// Four properties the stock mediator lacks:
 //   1. TAILNET TRANSPORT  — private hyperdht (bootstrap=seed, bind=own tailnet IP, firewalled:false):
 //                           connects directly over WireGuard, no public DHT, no holepunch. Stable, no churn.
 //   2. PEER AUTH          — a peer may join only by proving control of an allowlisted member node DID
 //                           (challenge -> keymaster addProof -> verifyProof + allowlist + fresh nonce).
 //   3. SCOPED GOSSIP      — only SM_SHARE_DIDS are exported out AND accepted in. Anything else is dropped,
 //                           so a member's private (local-registry) DIDs are structurally un-gossipable.
+//   4. CONFIRM-ON-IMPORT  — (v0.2) after /batch/import, /events/process is called so a synced UPDATE actually
+//                           applies to the resolvable DID doc. Without it the sphere only relays CONFIRMED
+//                           state; with it, a peer's post-create keyAgreement/endpoint publish becomes
+//                           resolvable here — closing the cross-node update gap (gate 3) that blocks DIDComm.
 //
 // Uses Archon AS-IS: every gatekeeper/keymaster call is the public HTTP API. No core changes.
 import Hyperswarm from 'hyperswarm';
@@ -147,8 +151,16 @@ async function importScoped(events, fromDID) {
   const dropped = events.length - kept.length;
   if (!kept.length) { if (dropped) log(`dropped ${dropped} out-of-scope events from ${fromDID}`); return; }
   try {
-    const res = await gk.call('POST', '/batch/import', kept);
-    log(`imported ${kept.length} scoped events from ${fromDID}${dropped ? ` (${dropped} out-of-scope dropped)` : ''} -> ${JSON.stringify(res).slice(0, 90)}`);
+    const imp = await gk.call('POST', '/batch/import', kept);
+    // v0.2 — /batch/import only QUEUES ops. On a hyperswarm (queuing) registry they apply to the resolvable
+    // DID doc ONLY after /events/process. Without this, a peer's synced UPDATE (its keyAgreement/endpoint
+    // publish) never becomes resolvable here → cross-node DIDComm/credential-accept fails (gate 3). Proven:
+    // import → {queued:N,processed:0}; then process → {added:N} and the keyAgreement resolves. This is the
+    // one change that makes the sphere actually CONFIRM updates cross-node, not just relay confirmed state.
+    const queued = Number(imp?.queued) || 0;
+    const proc = queued ? await gk.call('POST', '/events/process') : null;
+    log(`imported ${kept.length} scoped events from ${fromDID}${dropped ? ` (${dropped} out-of-scope dropped)` : ''}`
+        + ` -> import ${JSON.stringify(imp).slice(0, 70)}${proc ? `  process ${JSON.stringify(proc).slice(0, 70)}` : '  (nothing new to process)'}`);
   } catch (e) { log('import error', e.message); }
 }
 

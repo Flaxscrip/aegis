@@ -190,3 +190,65 @@ resolves across the pair only when looked up.
 - Publish the gatekeeper on `0.0.0.0:4324` (reachable on `tailscale0`); a host firewall may need
   `allow in on tailscale0 to any port 4324`. (WSL2 port-proxy note above applies only if the peer is
   Windows; gamerflax was native Linux, so no translation layer was needed.)
+
+## 6. Private topic vs Sphere — and why active card-passing needs a mediator
+
+§5's selective fallback is the right coupling for **arms-length** peers (resolve a DID on demand, nothing
+bulk-syncs). But it has a hard limit, and crossing it is what distinguishes a *private node* from a *sphere*.
+
+### The limit: fallback resolves CONFIRMED state only (the "gate 3" finding, 2026-07-28)
+
+The peer fallback (and the `/1.0/identifiers` universal-resolver surface it uses) returns only the **confirmed**
+DID document. On the `hyperswarm` registry **with no mediator**, a `create` event is auto-confirmed — so
+provisioning and basic resolution work cross-node — but any **post-create UPDATE stays *unconfirmed***. The
+load-bearing case is `publishDidComm`: an identity's **keyAgreement key** (needed to encrypt *to* it) and its
+**DIDComm service endpoint** are updates. So:
+
+> A sender on node A resolves a peer on node B, gets the *confirmed base* doc, and sees **no keyAgreement** —
+> even though node B's own `/api/v1/did` shows it. `packDidComm` fails `DID has no published keyAgreement key`,
+> and cross-node DIDComm / credential-accept never completes.
+
+Proven live: node B `/api/v1/did` → `keyAgreement: YES`; node B `?confirm=true` and `/1.0/identifiers` → `NO`;
+node A via fallback → `NO`. This is **not** registry (that gate is: use `hyperswarm` + `ARCHON_GATEKEEPER_REGISTRIES=local,hyperswarm`) and **not** an app bug — it's cross-node *confirmation* of updates.
+
+### Private topic ≠ Sphere
+
+- **Private topic** (`/aegis-private/<random>`) is a node's **solo isolation** — unique, local-only, nobody
+  else on it. You never share it or run a mediator on it; doing so would defeat the isolation it exists for.
+- **Sphere** (`/aegis-sphere/<random>`) is a **separate, deliberately-shared** topic for a defined member group,
+  with a mediator that **distributes and confirms** members' operations to each other. The private topics stay
+  private; the sphere sits alongside them as the group's confirmation domain.
+
+Selective fallback = arms-length peers. **A sphere = members** who want to be mutually resolvable *including
+updates* — which is exactly what two people **actively passing cards** are.
+
+### The three gates for a cross-node card-pass (each with its owner)
+
+| Gate | Owner | Fix |
+|---|---|---|
+| **1. Transport** — a sealed message physically reaches the other node | Aegis (L6) | Tor onion front (`ONION-MAILBOX.md`) or tailnet — **proven** |
+| **2. Registry** — author the ephemeral/credential docs accept rides | Aegis (substrate) | `hyperswarm` registry + gatekeeper `local,hyperswarm` support (§ SANDBOX-PROFILE 6) |
+| **3. Cross-node update confirmation** — sender sees the recipient's keyAgreement | **Sphere / mediator** | `aegis-secure-mediator` confirms the update cross-node |
+
+### The mediator IS the sphere's confirmation mechanism — `aegis-secure-mediator` (`deploy/secure-mediator/`)
+
+A hardened drop-in for Archon's stock `hyperswarm-mediator`, using Archon **as-is** (public gatekeeper/keymaster
+HTTP API; no core changes). Four properties:
+
+1. **Tailnet transport** — private `hyperdht` (`bootstrap`=a tailnet seed, `host`=own tailnet IP,
+   `firewalled:false`): members connect **directly over WireGuard**. This is what fixes the stock mediator's
+   `Connected nodes: 0` — the public-DHT holepunch fails between two NATs (see the gossip diagnosis).
+2. **Peer auth** — a peer joins only by proving control of an **allowlisted member node DID** (`SM_MEMBERS`):
+   challenge nonce → `keymaster /keys/sign` → `verifyProof` + allowlist + topic + fresh-nonce. The sphere is
+   scoped to *exactly* the intended members — not open gossip.
+3. **Scoped gossip** — only `SM_SHARE_DIDS` are exported out **and** accepted in; a member's private
+   (local-registry) DIDs are structurally un-gossipable.
+4. **Confirm-on-import (v0.2)** — after `/batch/import`, it calls `/events/process`, so a synced **update**
+   actually applies to the resolvable doc. This is the change that closes **gate 3**: with it, a peer's
+   keyAgreement/endpoint publish becomes resolvable across the sphere; without it the sync only relays
+   already-confirmed state. (`/batch/import` alone returns `{queued:N, processed:0}` — the process step is
+   mandatory on a queuing registry.)
+
+**Isolation is preserved:** `internal:true` everywhere except the deliberate tailnet leg; no public DHT, no
+public egress; membership + share-scope are cryptographically enforced. The sphere is a *private group channel*,
+not exposure. This replaces the stock mediator image on the sphere nodes — mature it here, then propose upstream.

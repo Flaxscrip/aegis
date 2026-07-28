@@ -12,7 +12,7 @@ which **does not traverse two different NATs** (proven on megaflax↔gamerflax),
 (new keypair) every 60s while unconnected — a cold-start deadlock. It also gossips **`getDIDs()` = the entire
 node** to **anyone who knows the topic**.
 
-## What this changes (3 properties)
+## What this changes (4 properties)
 
 1. **Tailnet transport** — private `hyperdht` (`bootstrap`=a seed on the tailnet, `host`=own tailnet IP,
    `firewalled:false`). Nodes connect **directly over WireGuard**; no public DHT, no holepunch, stable (no churn).
@@ -23,6 +23,13 @@ node** to **anyone who knows the topic**.
 3. **Scoped gossip** — only `SM_SHARE_DIDS` are exported out **and** accepted in. Everything else is dropped,
    so a member's private (local-registry) DIDs are **structurally un-gossipable** — the non-pollution
    guarantee enforced at the transport layer.
+4. **Confirm-on-import (v0.2)** — after `POST /batch/import`, it calls `POST /events/process`. `/batch/import`
+   only **queues** ops (`{queued:N, processed:0}`); on the `hyperswarm` (queuing) registry they apply to the
+   *resolvable* DID doc only after processing. Without this, a peer's post-create **update** — its
+   `keyAgreement` key / DIDComm endpoint — never becomes resolvable here, so the sphere would relay only
+   already-confirmed state and cross-node DIDComm/credential-accept would still fail ("gate 3"). *With* it, the
+   member group actually **confirms** each other's updates. Proven: import → `{queued:2,processed:0}`; process
+   → `{added:2}` → `keyAgreement` resolves. See `docs/CONTAINER-TOPOLOGY.md §6`.
 
 ## Trust model / setup
 
@@ -62,5 +69,11 @@ or a loopback-published port (the guarded `:4324` won't work — the guard block
 
 ## Status
 
-v0.1 — transport + peer-auth + scoped-gossip implemented against the public Archon API. Maturation: bind the
-mediator identity to the node DID via a signed cert; per-DID publish policy; metrics.
+v0.2 — transport + peer-auth + scoped-gossip + **confirm-on-import** (the gate-3 fix — `/events/process` after
+`/batch/import`), against the public Archon API. Validated by hand-simulating one sync
+(export→import→process) between the two isolated nodes: the recipient's `keyAgreement` became resolvable on the
+sender's node and DIDComm delivery advanced past encryption. **Next (live deployment):** stand up the tailnet
+`seed` between megaflax↔gamerflax and run the mediator on both aegis/Hearthold nodes, scoped to the Sovereign +
+overlay-member DIDs — then re-run the delivery end-to-end over Tor. Further maturation: bind the mediator
+identity to the node DID via a signed cert; per-DID publish policy; metrics; local `processEvents` before export
+so a just-published local update is exported already-applied.
