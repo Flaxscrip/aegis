@@ -1,6 +1,6 @@
 services:
   herald:
-    profiles: ["drawbridge-names"]   # decoupled: names mediator (needs tor) is opt-in, not pulled by `drawbridge`
+    profiles: ["herald"]   # decoupled: names mediator (needs tor) is opt-in, not pulled by `drawbridge`
     build:
       context: ../..
       dockerfile: services/herald/Dockerfile
@@ -52,7 +52,7 @@ services:
         condition: service_started
 
   herald-client:
-    profiles: ["drawbridge-names"]
+    profiles: ["herald"]
     build:
       context: ../..
       dockerfile: docker/Dockerfile.herald-client
@@ -132,7 +132,7 @@ services:
         condition: service_healthy
 
   lightning-mediator:
-    profiles: ["drawbridge-lightning"]   # decoupled: lightning stack is opt-in, not pulled by `drawbridge`
+    profiles: ["lightning"]   # decoupled: lightning stack is opt-in, not pulled by `drawbridge`
     build:
       context: ../..
       dockerfile: docker/Dockerfile.lightning-mediator
@@ -199,7 +199,7 @@ services:
         condition: service_healthy
 
   tor:
-    profiles: ["drawbridge"]
+    profiles: ["tor"]
     image: goldy/tor-hidden-service:latest
     ports:
       - "${ARCHON_TOR_SOCKS_PORT:-127.0.0.1:9050}:9050"
