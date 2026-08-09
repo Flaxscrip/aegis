@@ -1,6 +1,6 @@
 services:
   herald:
-    profiles: ["drawbridge"]
+    profiles: ["drawbridge-names"]   # decoupled: names mediator (needs tor) is opt-in, not pulled by `drawbridge`
     build:
       context: ../..
       dockerfile: services/herald/Dockerfile
@@ -52,7 +52,7 @@ services:
         condition: service_started
 
   herald-client:
-    profiles: ["drawbridge"]
+    profiles: ["drawbridge-names"]
     build:
       context: ../..
       dockerfile: docker/Dockerfile.herald-client
@@ -127,11 +127,12 @@ services:
         condition: service_healthy
       lightning-mediator:
         condition: service_healthy
+        required: false   # decoupled: drawbridge starts without the lightning stack (didcomm/gatekeeper proxy is independent)
       redis:
         condition: service_healthy
 
   lightning-mediator:
-    profiles: ["drawbridge"]
+    profiles: ["drawbridge-lightning"]   # decoupled: lightning stack is opt-in, not pulled by `drawbridge`
     build:
       context: ../..
       dockerfile: docker/Dockerfile.lightning-mediator

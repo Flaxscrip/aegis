@@ -5,10 +5,10 @@ x-cln-image: &cln-image ghcr.io/lightning-goats/cl-hive-node:${ARCHON_CLN_VERSIO
 
 services:
   cln-mainnet-node:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: *cln-image
     environment:
-      - NETWORK=bitcoin
+      - NETWORK=${ARCHON_CLN_NETWORK:-bitcoin}   # regtest sandbox: set ARCHON_CLN_NETWORK=regtest (default mainnet)
       - ALIAS=${ARCHON_CLN_ALIAS:-archon}
       - RGB=${ARCHON_CLN_RGB:-e33502}
       - BITCOIN_RPCHOST=${ARCHON_BTC_HOST}
@@ -36,13 +36,13 @@ services:
       - "127.0.0.1:3001:3001"
 
   drawbridge-init:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: *cln-image
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         RUNE_FILE=/data/lightning/drawbridge/rune.txt
-        RPC_SOCKET=/data/lightning/bitcoin/bitcoin/lightning-rpc
+        RPC_SOCKET=/data/lightning/${ARCHON_CLN_NETWORK:-bitcoin}/${ARCHON_CLN_NETWORK:-bitcoin}/lightning-rpc
 
         if [ -f "$$RUNE_FILE" ]; then
             echo "[drawbridge-init] Rune already exists, skipping"
@@ -80,13 +80,13 @@ services:
     restart: "no"
 
   rtl-init:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: *cln-image
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         RUNE_FILE=/data/lightning/rtl/rune.txt
-        RPC_SOCKET=/data/lightning/bitcoin/bitcoin/lightning-rpc
+        RPC_SOCKET=/data/lightning/${ARCHON_CLN_NETWORK:-bitcoin}/${ARCHON_CLN_NETWORK:-bitcoin}/lightning-rpc
 
         if [ -f "$$RUNE_FILE" ]; then
             echo "[rtl-init] Rune already exists, skipping"
@@ -123,7 +123,7 @@ services:
     restart: "no"
 
   rtl:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: shahanafarooqui/rtl:0.15.1
     entrypoint: ["/bin/sh", "/scripts/rtl-entrypoint.sh"]
     environment:
@@ -144,15 +144,15 @@ services:
         condition: service_started
 
   lnbits-init:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: *cln-image
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         RUNE_DIR=/data/lightning/lnbits
         RUNE_FILE=$$RUNE_DIR/runes.env
-        RPC_SOCKET=/data/lightning/bitcoin/bitcoin/lightning-rpc
-        CERT_DIR=/data/lightning/bitcoin/bitcoin
+        RPC_SOCKET=/data/lightning/${ARCHON_CLN_NETWORK:-bitcoin}/${ARCHON_CLN_NETWORK:-bitcoin}/lightning-rpc
+        CERT_DIR=/data/lightning/${ARCHON_CLN_NETWORK:-bitcoin}/${ARCHON_CLN_NETWORK:-bitcoin}
 
         if [ -f "$$RUNE_FILE" ]; then
             echo "[lnbits-init] Runes already exist, skipping"
@@ -206,7 +206,7 @@ services:
     restart: "no"
 
   lnbits:
-    profiles: ["lightning", "drawbridge"]
+    profiles: ["lightning", "drawbridge-lightning"]
     image: ghcr.io/archetech/lnbits:1.5.3-archetech.1
     entrypoint: ["/bin/sh", "/scripts/lnbits-entrypoint.sh"]
     environment:
